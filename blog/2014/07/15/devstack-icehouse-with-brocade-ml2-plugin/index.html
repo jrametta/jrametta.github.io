@@ -1,0 +1,661 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Devstack Icehouse With Brocade ML2 Plugin - The Fabric</title>
+  <meta name="author" content="Jeff Rametta">
+
+  
+  <meta name="description" content="Devstack is a scripted installation of OpenStack that can be used for development or
+demo purposes. This writeup covers a simple two node devstack &hellip;">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="http://jrametta.github.io/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="The Fabric" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="//ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.min.js"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">The Fabric</a></h1>
+  
+    <h2>Jeff Rametta | Yet Another Cloud and Networking Blog</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:jrametta.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">Devstack Icehouse With Brocade ML2 Plugin</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+
+
+
+  
+
+
+<time datetime="2014-07-15T00:21:31-07:00" pubdate data-updated="true">Jul 15<sup>th</sup>, 2014</time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><p><a href="http://devstack.org">Devstack</a> is a scripted installation of OpenStack that can be used for development or
+demo purposes.  This writeup covers a simple two node devstack installation using the Brocade VCS plugin for
+OpenStack networking (aka Neutron).</p>
+
+<!--more-->
+
+
+<p>The VCS ML2 plugin supports both Open vSwitch and Linux Bridge agents and realizes tenant networks as
+port-profiles in the physical network infrastructure.  A port-profile in a Brocade Ethernet fabric is like a
+network policy for VMs or OpenStack instances and can contain information like VLAN assignment, QoS
+information, and ACLs.  Because tenant networks are provisioned end-to-end, no additional networking setup is
+required anywhere in the network.</p>
+
+<h2>Deployment Topology</h2>
+
+<p>My hardware environment is pretty simple.  I have two servers on which to run OpenStack &ndash; one will be a
+controller/compute node, the other will just be a compute node.</p>
+
+<p><img src="/images/os_topo.png"></p>
+
+<h2>Server Configuration</h2>
+
+<p>I used Ubuntu Precise as the OS platform.  The network interfaces were configured as below on the controller.
+Compute node is similar.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># The loopback network interface
+</span><span class='line'>auto lo
+</span><span class='line'>iface lo inet loopback
+</span><span class='line'>
+</span><span class='line'># The primary network interface
+</span><span class='line'>auto eth0
+</span><span class='line'>iface eth0 inet static
+</span><span class='line'>address 10.17.88.129
+</span><span class='line'>netmask 255.255.240.0
+</span><span class='line'>gateway 10.17.80.1
+</span><span class='line'>dns-nameservers 10.17.80.21
+</span><span class='line'>
+</span><span class='line'># Private tenant network interface (connected to VCS fabric)
+</span><span class='line'>auto eth1
+</span><span class='line'>iface eth1 inet manual
+</span><span class='line'>up ifconfig eth1 up promisc</span></code></pre></td></tr></table></div></figure>
+
+
+<p>The VCS plugin currently uses NETCONF for communication with the Ethernet fabric and the ncclient python library
+is required on the controller node.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># git clone https://code.grnet.gr/git/ncclient
+</span><span class='line'># cd ncclient && python ./setup.py install</span></code></pre></td></tr></table></div></figure>
+
+
+<p>OpenStack runs as a non-root user that has sudo privileges. I usually have a user already setup, but devstack
+will create a new user if you try to run stack.sh as root.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># adduser stack
+</span><span class='line'># echo "stack ALL=(ALL) NOPASSWD: ALL" &gt;&gt; /etc/sudoers</span></code></pre></td></tr></table></div></figure>
+
+
+<p>As stack user, install this devstack repo in the home directory</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># git clone https://github.com/openstack-dev/devstack.git
+</span><span class='line'># cd devstack</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>Configuring Devstack</h2>
+
+<p>Controller node local.conf</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+<span class='line-number'>51</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>[[local|localrc]]
+</span><span class='line'># MISC
+</span><span class='line'># RECLONE=yes
+</span><span class='line'># OFFLINE=False
+</span><span class='line'>
+</span><span class='line'># Branch/Repos
+</span><span class='line'>NOVA_BRANCH=stable/icehouse
+</span><span class='line'>GLANCE_BRANCH=stable/icehouse
+</span><span class='line'>HORIZON_BRANCH=stable/icehouse
+</span><span class='line'>KEYSTONE_BRANCH=stable/icehouse
+</span><span class='line'>QUANTUM_BRANCH=stable/icehouse
+</span><span class='line'>NEUTRON_BRANCH=stable/icehouse
+</span><span class='line'>CEILOMETER_BRANCH=stable/icehouse
+</span><span class='line'>HEAT_BRANCH=stable/icehouse
+</span><span class='line'>
+</span><span class='line'>disable_service n-net
+</span><span class='line'>enable_service g-api g-reg key n-crt n-obj n-cpu n-cond n-sch horizon
+</span><span class='line'>
+</span><span class='line'># Neutron services (enable)
+</span><span class='line'>enable_service neutron q-svc q-agt q-dhcp q-meta q-l3
+</span><span class='line'>Q_PLUGIN_CLASS=neutron.plugins.ml2.plugin.Ml2Plugin
+</span><span class='line'>Q_PLUGIN_EXTRA_CONF_FILES=ml2_conf_brocade.ini
+</span><span class='line'>Q_PLUGIN_EXTRA_CONF_PATH=/home/stack/devstack
+</span><span class='line'>Q_ML2_PLUGIN_MECHANISM_DRIVERS=openvswitch,brocade
+</span><span class='line'>Q_ML2_PLUGIN_TYPE_DRIVERS=${Q_ML2_PLUGIN_TYPE_DRIVERS:-local,flat,vlan,gre,vxlan}
+</span><span class='line'>ENABLE_TENANT_VLANS="True"
+</span><span class='line'>PHYSICAL_NETWORK="phys1"
+</span><span class='line'>TENANT_VLAN_RANGE=901:950
+</span><span class='line'>OVS_PHYSICAL_BRIDGE=br-eth1
+</span><span class='line'>
+</span><span class='line'>ADMIN_PASSWORD=openstack
+</span><span class='line'>DATABASE_PASSWORD=$ADMIN_PASSWORD
+</span><span class='line'>RABBIT_PASSWORD=$ADMIN_PASSWORD
+</span><span class='line'>SERVICE_PASSWORD=$ADMIN_PASSWORD
+</span><span class='line'>SERVICE_TOKEN=$ADMIN_PASSWORD
+</span><span class='line'>MYSQL_PASSWORD=$ADMIN_PASSWORD
+</span><span class='line'>
+</span><span class='line'>DEST=/opt/stack
+</span><span class='line'>LOG=True
+</span><span class='line'>LOGFILE=stack.sh.log
+</span><span class='line'>LOGDAYS=1
+</span><span class='line'>HOST_NAME=$(hostname)
+</span><span class='line'>SERVICE_HOST=10.17.88.129
+</span><span class='line'>HOST_IP=10.17.88.129
+</span><span class='line'>MYSQL_HOST=$SERVICE_HOST
+</span><span class='line'>RABBIT_HOST=$SERVICE_HOST
+</span><span class='line'>GLANCE_HOSTPORT=$SERVICE_HOST:9292
+</span><span class='line'>KEYSTONE_AUTH_HOST=$SERVICE_HOST
+</span><span class='line'>KEYSTONE_SERVICE_HOST=$SERVICE_HOST
+</span><span class='line'>SCHEDULER=nova.scheduler.filter_scheduler.FilterScheduler
+</span><span class='line'>SCREEN_HARDSTATUS="%{= Kw}%-w%{BW}%n %t%{-}%+w"
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>The controller node should also contain an ML2 configuration file ml2_conf_brocade.ini identifying
+the authentication credentials
+and management virtual IP for the VCS fabric.  The location of this file (usually somewhere in
+/etc/neutron/plugins), but should be specified via the <code>Q_PLUGIN_EXTRA_CONF_PATH</code> parameter in local.conf above.
+I happened to just place it in stack&rsquo;s home directory.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>[ml2_brocade]
+</span><span class='line'>username = admin
+</span><span class='line'>password = password
+</span><span class='line'>address  = 172.27.116.32
+</span><span class='line'>ostype   = NOS
+</span><span class='line'>physical_networks = phys1</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Compute node local.conf</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>[[local|localrc]]
+</span><span class='line'>
+</span><span class='line'># MISC
+</span><span class='line'># RECLONE=yes
+</span><span class='line'># OFFLINE=True
+</span><span class='line'>
+</span><span class='line'># Branch/Repos
+</span><span class='line'>NOVA_BRANCH=stable/icehouse
+</span><span class='line'>GLANCE_BRANCH=stable/icehouse
+</span><span class='line'>HORIZON_BRANCH=stable/icehouse
+</span><span class='line'>KEYSTONE_BRANCH=stable/icehouse
+</span><span class='line'>QUANTUM_BRANCH=stable/icehouse
+</span><span class='line'>NEUTRON_BRANCH=stable/icehouse
+</span><span class='line'>
+</span><span class='line'>disable_service n-net
+</span><span class='line'>ENABLED_SERVICES=n-cpu,rabbit,quantum,q-agt,n-novnc
+</span><span class='line'>
+</span><span class='line'>Q_PLUGIN=ml2
+</span><span class='line'>Q_AGENT=openvswitch
+</span><span class='line'>ENABLE_TENANT_VLANS="True"
+</span><span class='line'>PHYSICAL_NETWORK="phys1"
+</span><span class='line'>TENANT_VLAN_RANGE=901:950
+</span><span class='line'>OVS_PHYSICAL_BRIDGE=br-eth1
+</span><span class='line'>
+</span><span class='line'>ADMIN_PASSWORD=openstack
+</span><span class='line'>DATABASE_PASSWORD=$ADMIN_PASSWORD
+</span><span class='line'>RABBIT_PASSWORD=$ADMIN_PASSWORD
+</span><span class='line'>SERVICE_PASSWORD=$ADMIN_PASSWORD
+</span><span class='line'>SERVICE_TOKEN=$ADMIN_PASSWORD
+</span><span class='line'>MYSQL_PASSWORD=$ADMIN_PASSWORD
+</span><span class='line'>
+</span><span class='line'>DEST=/opt/stack
+</span><span class='line'>LOG=True
+</span><span class='line'>LOGFILE=stack.sh.log
+</span><span class='line'>LOGDAYS=1
+</span><span class='line'>HOST_NAME=$(hostname)
+</span><span class='line'>SERVICE_HOST=10.17.88.129
+</span><span class='line'>HOST_IP=10.17.88.130
+</span><span class='line'>MYSQL_HOST=$SERVICE_HOST
+</span><span class='line'>RABBIT_HOST=$SERVICE_HOST
+</span><span class='line'>GLANCE_HOSTPORT=$SERVICE_HOST:9292
+</span><span class='line'>KEYSTONE_AUTH_HOST=$SERVICE_HOST
+</span><span class='line'>KEYSTONE_SERVICE_HOST=$SERVICE_HOST
+</span><span class='line'>SCHEDULER=nova.scheduler.filter_scheduler.FilterScheduler
+</span><span class='line'>
+</span><span class='line'>VNCSERVER_LISTEN=$HOST_IP
+</span><span class='line'>VNCSERVER_PROXYCLIENT_ADDRESS=$HOST_IP
+</span><span class='line'>
+</span><span class='line'>SCREEN_HARDSTATUS="%{= Kw}%-w%{BW}%n %t%{-}%+w"</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>Testing Things Out</h2>
+
+<p>Source the openrc in the devstack directory to obtain credentials and use the CLI to have a look around,
+create networks, and launch new virtual machine instances. Alternatively, login to the Horizon dashboard at
+<a href="http://controlerNodeIP">http://controlerNodeIP</a> and use the GUI (user: admin or demo, password: openstack).</p>
+
+<p>Within the VCS fabric, check that new port-profiles are created for every tenant network that is created. Two
+new port-profiles should exist after running stack.sh for the first time.  These corrospond to the initial
+pubic and private networks that the devstack script creates.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>DX1# show port-profile
+</span><span class='line'>port-profile default
+</span><span class='line'>ppid 0
+</span><span class='line'>vlan-profile
+</span><span class='line'>  switchport
+</span><span class='line'>  switchport mode trunk
+</span><span class='line'>  switchport trunk allowed vlan all
+</span><span class='line'>  switchport trunk native-vlan 1
+</span><span class='line'>port-profile openstack-profile-2
+</span><span class='line'>ppid 1
+</span><span class='line'>vlan-profile
+</span><span class='line'>  switchport
+</span><span class='line'>  switchport mode trunk
+</span><span class='line'>  switchport trunk allowed vlan add 2
+</span><span class='line'>port-profile openstack-profile-3
+</span><span class='line'>ppid 2
+</span><span class='line'>vlan-profile
+</span><span class='line'>  switchport
+</span><span class='line'>  switchport mode trunk
+</span><span class='line'>  switchport trunk allowed vlan add 3</span></code></pre></td></tr></table></div></figure>
+
+
+<p>As new instances are launched, they should be tied to the port-profile corresponding the network they belong
+to. Any instances on the same network should be able to communicate with each other through the VCS fabric.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>VDX1# show port-profile status
+</span><span class='line'>Port-Profile                        PPID        Activated        Associated MAC Interface
+</span><span class='line'>openstack-profile-2                 1           Yes              fa16.3e1b.95d0 None
+</span><span class='line'>                                                                 fa16.3e64.fce8        Gi 2/0/28
+</span><span class='line'>                                                                 fa16.3e85.5b2f        Gi 2/0/28
+</span><span class='line'>                                                                 fa16.3ea6.3741        Gi 2/0/5
+</span><span class='line'>                                                                 fa16.3ecd.bfc1        Gi 2/0/5
+</span><span class='line'>                                                                 fa16.3eeb.87f7        Gi 2/0/28
+</span><span class='line'>openstack-profile-3                 2           Yes              fa16.3e2c.0baf        None</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>References</h2>
+
+<ul>
+<li>Brocade OpenStack Networking Plugin Wiki <a href="https://wiki.openstack.org/wiki/Brocade-quantum-plugin">https://wiki.openstack.org/wiki/Brocade-quantum-plugin</a></li>
+<li>OpenStack Documentation <a href="http://docs.openstack.org">http://docs.openstack.org</a></li>
+<li>DevStack <a href="http://devstack.org">http://devstack.org</a></li>
+</ul>
+
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Jeff Rametta</span></span>
+
+      
+
+
+
+
+
+
+
+
+  
+
+
+<time datetime="2014-07-15T00:21:31-07:00" pubdate data-updated="true">Jul 15<sup>th</sup>, 2014</time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/brocade/'>brocade</a>, <a class='category' href='/blog/categories/devstack/'>devstack</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  <a href="//twitter.com/share" class="twitter-share-button" data-url="http://jrametta.github.io/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin/" data-via="" data-counturl="http://jrametta.github.io/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin/" >Tweet</a>
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2014/07/14/red-hat-rdo-on-brocade-ethernet-fabrics/" title="Previous Post: Red Hat RDO on Brocade Ethernet Fabrics">&laquo; Red Hat RDO on Brocade Ethernet Fabrics</a>
+      
+      
+        <a class="basic-alignment right" href="/blog/2014/07/16/openstack-live-migration/" title="Next Post: OpenStack Live Migration">OpenStack Live Migration &raquo;</a>
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+  <h1>Recent Posts</h1>
+  <ul id="recent_posts">
+    
+      <li class="post">
+        <a href="/blog/2014/07/16/openstack-live-migration/">OpenStack Live Migration</a>
+      </li>
+    
+      <li class="post">
+        <a href="/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin/">Devstack Icehouse With Brocade ML2 Plugin</a>
+      </li>
+    
+      <li class="post">
+        <a href="/blog/2014/07/14/red-hat-rdo-on-brocade-ethernet-fabrics/">Red Hat RDO on Brocade Ethernet Fabrics</a>
+      </li>
+    
+  </ul>
+</section>
+
+<section>
+  <h1>GitHub Repos</h1>
+  <ul id="gh_repos">
+    <li class="loading">Status updating...</li>
+  </ul>
+  
+  <a href="https://github.com/jrametta">@jrametta</a> on GitHub
+  
+  <script type="text/javascript">
+    $(document).ready(function(){
+        if (!window.jXHR){
+            var jxhr = document.createElement('script');
+            jxhr.type = 'text/javascript';
+            jxhr.src = '/javascripts/libs/jXHR.js';
+            var s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(jxhr, s);
+        }
+
+        github.showRepos({
+            user: 'jrametta',
+            count: 0,
+            skip_forks: true,
+            target: '#gh_repos'
+        });
+    });
+  </script>
+  <script src="/javascripts/github.js" type="text/javascript"> </script>
+</section>
+
+
+
+
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2014 - Jeff Rametta -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+<script type="text/javascript">
+      var disqus_shortname = 'httpjramettagithubiothefabric';
+      
+        
+        // var disqus_developer = 1;
+        var disqus_identifier = 'http://jrametta.github.io/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin/';
+        var disqus_url = 'http://jrametta.github.io/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin/';
+        var disqus_script = 'embed.js';
+      
+    (function () {
+      var dsq = document.createElement('script'); dsq.type = 'text/javascript'; dsq.async = true;
+      dsq.src = '//' + disqus_shortname + '.disqus.com/' + disqus_script;
+      (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+    }());
+</script>
+
+
+
+
+
+
+
+  <script type="text/javascript">
+    (function(){
+      var twitterWidgets = document.createElement('script');
+      twitterWidgets.type = 'text/javascript';
+      twitterWidgets.async = true;
+      twitterWidgets.src = '//platform.twitter.com/widgets.js';
+      document.getElementsByTagName('head')[0].appendChild(twitterWidgets);
+    })();
+  </script>
+
+
+
+
+
+</body>
+</html>

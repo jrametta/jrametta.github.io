@@ -2,17 +2,35 @@
 <urlset xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.sitemaps.org/schemas/sitemap/0.9 http://www.sitemaps.org/schemas/sitemap/0.9/sitemap.xsd" xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   
   
+  <url>
+    <loc>http://jrametta.github.io/blog/2014/07/16/openstack-live-migration/</loc>
+    <lastmod>2014-07-16T21:52:20-07:00</lastmod>
+    <priority>0.8</priority>
+  </url>
+  
+  <url>
+    <loc>http://jrametta.github.io/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin/</loc>
+    <lastmod>2014-07-15T00:21:31-07:00</lastmod>
+    <priority>0.8</priority>
+  </url>
+  
+  <url>
+    <loc>http://jrametta.github.io/blog/2014/07/14/red-hat-rdo-on-brocade-ethernet-fabrics/</loc>
+    <lastmod>2014-07-14T22:46:57-07:00</lastmod>
+    <priority>0.8</priority>
+  </url>
+  
   
   <url>
     <loc>http://jrametta.github.io/blog/archives/</loc>
-    <lastmod>2014-07-20T02:26:59-07:00</lastmod>
+    <lastmod>2014-07-20T02:42:18-07:00</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
   </url>
   
   <url>
     <loc>http://jrametta.github.io/</loc>
-    <lastmod>2014-07-20T02:26:59-07:00</lastmod>
+    <lastmod>2014-07-20T02:42:18-07:00</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>

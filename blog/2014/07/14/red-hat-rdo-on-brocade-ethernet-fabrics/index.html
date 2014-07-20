@@ -1,0 +1,575 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Red Hat RDO on Brocade Ethernet Fabrics - The Fabric</title>
+  <meta name="author" content="Jeff Rametta">
+
+  
+  <meta name="description" content="This short writup describes how to setup Red Hat&rsquo;s OpenStack RDO Havana release with the Brocade VCS plugin for Neutron networking. &hellip;">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="http://jrametta.github.io/blog/2014/07/14/red-hat-rdo-on-brocade-ethernet-fabrics">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="The Fabric" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="//ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.min.js"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">The Fabric</a></h1>
+  
+    <h2>Jeff Rametta | Yet Another Cloud and Networking Blog</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:jrametta.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">Red Hat RDO on Brocade Ethernet Fabrics</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+
+
+
+  
+
+
+<time datetime="2014-07-14T22:46:57-07:00" pubdate data-updated="true">Jul 14<sup>th</sup>, 2014</time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><p>This short writup describes how to setup Red Hat&rsquo;s OpenStack RDO Havana release with the Brocade VCS plugin for Neutron networking.</p>
+
+<!--more-->
+
+
+<h2>INTRODUCTION</h2>
+
+<p>RDO can easily be deployed using Packstack and the Linux Bridge plugin.  Once complete, a few steps are
+required to reconfigure Neutron to use the Brocade VCS plugin for managing both virtual and physical network
+infrastructure through OpenStack API.</p>
+
+<p>This guide has been tested using CentOS 6.4, but should be applicable to other Red Hat based systems such as
+RHEL or Fedora.</p>
+
+<p>With the Havana release of OpenStack, we are still using the monolithic network plugin. Ice House release will
+introduce the use of the Modular Layer2 (ML2) plugin to simultaneously utilize the variety of layer 2
+networking technologies.</p>
+
+<h2>BROCADE VCS CONFIGURATION</h2>
+
+<p>Brocade VDX switches should be running NOS 4.0 or above with logical chassis mode enabled for configuration
+distribution across all fabric nodes.  See the Brocade NOS administrators guide for additional information.
+Any ports connected to OpenStack compute/network nodes should be configured as port-profile ports.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>VDX_84_186# show running-config interface GigabitEthernet 2/0/28
+</span><span class='line'>interface GigabitEthernet 2/0/28
+</span><span class='line'>  port-profile-port
+</span><span class='line'> no shutdown</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>RDO INSTALLATION USING PACKSTACK</h2>
+
+<p>This guide will walk through the process of deploying OpenStack on a single server with the option of adding
+one or more additional compute nodes.
+Begin by deploying OpenStack as documented in the RDO Neutron Quickstart guide at
+<a href="http://openstack.redhat.com/Neutron-Quickstart.">http://openstack.redhat.com/Neutron-Quickstart.</a>  Install the software repos, reboot the system, and install
+PackStack.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># yum install –y -y http://rdo.fedorapeople.org/openstack-grizzly/rdo-release-grizzly.rpm
+</span><span class='line'># yum -y update
+</span><span class='line'># reboot
+</span><span class='line'># sudo yum install -y openstack-PackStackack python-netaddr</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Generate a PackStack answer file and edit the following variables to enable the linuxbridge plugin.
+Additional compute nodes can be specified here as well.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># packstack --gen-answer-file=linuxbridge.answers
+</span><span class='line'># vi linuxbridge.answers</span></code></pre></td></tr></table></div></figure>
+
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>CONFIG_QUANTUM_L2_PLUGIN=linuxbridge
+</span><span class='line'>CONFIG_QUANTUM_LB_VLAN_RANGES=physnet1:2:1000
+</span><span class='line'>CONFIG_QUANTUM_LB_INTERFACE_MAPPINGS=physnet1:eth1
+</span><span class='line'>CONFIG_NOVA_COMPUTE_HOSTS=10.17.95.6,10.17.88.130
+</span><span class='line'>CONFIG_NOVA_NETWORK_PRIVIF=eth1
+</span><span class='line'>CONFIG_NOVA_COMPUTE_PRIVIF=eth1</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Edit the configuration for  the physical interface connected to the VCS fabric for tenant networks.  It should
+be configured up with no IP address and in promiscuous mode.  All nodes should have a similar configuration.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>DEVICE="eth1"
+</span><span class='line'>BOOTPROTO=static
+</span><span class='line'>ONBOOT="yes"
+</span><span class='line'>TYPE="Ethernet"</span></code></pre></td></tr></table></div></figure>
+
+
+<p>One method to configure the interface for promiscuous mode at boot, is to create /sbin/ifup-local with the
+following content</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>#!/bin/bash
+</span><span class='line'>if [[ "$1" == "eth1" ]]
+</span><span class='line'>then
+</span><span class='line'>  /sbin/ifconfig $1 promisc
+</span><span class='line'>  RC=$?
+</span><span class='line'>fi</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Set executable bit.  This script will run during boot right after network interfaces are brought online.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># chmod +x /sbin/ifup-local
+</span><span class='line'># /etc/init.d/network restart</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Run packstack on the controller node using the previously created answer file</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># packstack --answer-file=linuxbridge.answers</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Once complete, edit /etc/ImageMagick//quantum/l3_agent.ini on the controller and remove br-ex from the
+following line (it should be set to nothing)</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>external_network_bridge =</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Download and install a test image into glance</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># wget -c https://launchpad.net/cirros/trunk/0.3.0/+download/cirros-0.3.0-x86_64-disk.img
+</span><span class='line'># glance image-create --name=cirros-0.3.0-x86_64 --disk-format=qcow2  \
+</span><span class='line'>   --container-format=bare &lt; cirros-0.3.0-x86_64-disk.img</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>INSTALL BROCADE NEUTRON PLUGIN</h2>
+
+<p>To simplify installation, all existing nova instances, networks, and routers should be deleted. Install the
+Brocade plugin from the repository on the controller/network node.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># yum install openstack-quantum-brocade`</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Edit /etc/quantum/plugins/brocade/brocade.ini file on the controller/network node.  The database user and
+password can be copied from the packstack answer file or preexisting linuxbridge.ini.  Ensure the database
+user has proper credentials.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>[SWITCH]
+</span><span class='line'>username = admin
+</span><span class='line'>password = password
+</span><span class='line'>address  = 10.254.8.5
+</span><span class='line'>ostype   = NOS
+</span><span class='line'>
+</span><span class='line'>[DATABASE]
+</span><span class='line'>sql_connection = mysql://root:75ddb50b165b4ed0@localhost/brcd_quantum?charset=utf8
+</span><span class='line'>
+</span><span class='line'>[PHYSICAL_INTERFACE]
+</span><span class='line'>physical_interface = physnet1
+</span><span class='line'>
+</span><span class='line'>[VLANS]
+</span><span class='line'>network_vlan_ranges = physnet1:1000:2999
+</span><span class='line'>
+</span><span class='line'>[AGENT]
+</span><span class='line'>root_helper = sudo /usr/bin/quantum-rootwrap /etc/quantum/rootwrap.conf
+</span><span class='line'>
+</span><span class='line'>[LINUX_BRIDGE]
+</span><span class='line'>physical_interface_mappings = physnet1:eth0</span></code></pre></td></tr></table></div></figure>
+
+
+<p>On the controller, create brcd_quantum database and grant permissions (change IP address and passwords as
+needed).</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># mysql &lt;&lt; EOF
+</span><span class='line'>CREATE DATABASE brcd_quantum;
+</span><span class='line'>GRANT ALL PRIVILEGES ON quantum.* TO 'quantum'@'localhost' \
+</span><span class='line'>IDENTIFIED BY 'password';
+</span><span class='line'>GRANT ALL PRIVILEGES ON quantum.* TO 'quantum'@'10.17.88.130' \
+</span><span class='line'>IDENTIFIED BY 'password';
+</span><span class='line'>FLUSH PRIVILEGES;
+</span><span class='line'>EOF</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Set the core plugin to Brocade in quantum.conf on all nodes.
+core_plugin = quantum.plugins.brocade.QuantumPlugin.BrocadePluginV2</p>
+
+<p>On the controller,QuantumPlugin install the netconf client needed to communicate with the VCS fabric</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># git clone https://code.grnet.gr/git/ncclient
+</span><span class='line'># cd ncclient && python setup.py install</span></code></pre></td></tr></table></div></figure>
+
+
+<p>On the controller, update the symlink in /etc/quantum to point to the brocade.ini file</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># rm plugin.ini && ln -s  /etc/quantum/plugins/brocade/brocade.ini plugin.ini</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Disable or remove the OVS agent if it is installed.  Reboot the system and verify working status.</p>
+
+<h2>TESTING THINGS OUT</h2>
+
+<p>Source the keystone rc file that was installed into root’s home directory to obtain credentials and verify
+status of OpenStack services.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># . ~/ keystonerc_admin
+</span><span class='line'># openstack-status
+</span><span class='line'># quantum agent-list</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Then use the CLI or Horizon to create networks, and launch new virtual machine instances.  Within the VCS
+fabric, check that new port-profiles are created for every tenant network that is created.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>VDX_84_186# show port-profile
+</span><span class='line'>port-profile default
+</span><span class='line'>ppid 0
+</span><span class='line'> vlan-profile
+</span><span class='line'>  switchport
+</span><span class='line'>  switchport mode trunk
+</span><span class='line'>  switchport trunk allowed vlan all
+</span><span class='line'>  switchport trunk native-vlan 1
+</span><span class='line'>port-profile openstack-profile-2
+</span><span class='line'>ppid 1
+</span><span class='line'> vlan-profile
+</span><span class='line'>  switchport
+</span><span class='line'>  switchport mode trunk
+</span><span class='line'>  switchport trunk allowed vlan add 2
+</span><span class='line'>port-profile openstack-profile-3
+</span><span class='line'>ppid 2
+</span><span class='line'> vlan-profile
+</span><span class='line'>  switchport
+</span><span class='line'>  switchport mode trunk
+</span><span class='line'>  switchport trunk allowed vlan add 3</span></code></pre></td></tr></table></div></figure>
+
+
+<p>As new instances are launched, they should be tied to the port-profile corresponding to the network they
+belong to.  Any instances on the same network should be able to communicate with each other.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>VDX_84_186# show port-profile status
+</span><span class='line'>Port-Profile                        PPID        Activated        Associated MAC        Interface
+</span><span class='line'>openstack-profile-2                 1           Yes              fa16.3e1b.95d0        None
+</span><span class='line'>                                                                 fa16.3e64.fce8        Gi 2/0/28
+</span><span class='line'>                                                                 fa16.3e85.5b2f        Gi 2/0/28
+</span><span class='line'>                                                                 fa16.3ea6.3741        Gi 2/0/5
+</span><span class='line'>                                                                 fa16.3ecd.bfc1        Gi 2/0/5
+</span><span class='line'>                                                                 fa16.3eeb.87f7        Gi 2/0/28
+</span><span class='line'>openstack-profile-3                 2           Yes              fa16.3e2c.0baf        None
+</span><span class='line'>
+</span></code></pre></td></tr></table></div></figure>
+
+
+
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Jeff Rametta</span></span>
+
+      
+
+
+
+
+
+
+
+
+  
+
+
+<time datetime="2014-07-14T22:46:57-07:00" pubdate data-updated="true">Jul 14<sup>th</sup>, 2014</time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/brocade/'>brocade</a>, <a class='category' href='/blog/categories/openstack/'>openstack</a>, <a class='category' href='/blog/categories/rdo/'>rdo</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  <a href="//twitter.com/share" class="twitter-share-button" data-url="http://jrametta.github.io/blog/2014/07/14/red-hat-rdo-on-brocade-ethernet-fabrics/" data-via="" data-counturl="http://jrametta.github.io/blog/2014/07/14/red-hat-rdo-on-brocade-ethernet-fabrics/" >Tweet</a>
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+      
+        <a class="basic-alignment right" href="/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin/" title="Next Post: Devstack Icehouse with Brocade ML2 Plugin">Devstack Icehouse with Brocade ML2 Plugin &raquo;</a>
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+  <h1>Recent Posts</h1>
+  <ul id="recent_posts">
+    
+      <li class="post">
+        <a href="/blog/2014/07/16/openstack-live-migration/">OpenStack Live Migration</a>
+      </li>
+    
+      <li class="post">
+        <a href="/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin/">Devstack Icehouse With Brocade ML2 Plugin</a>
+      </li>
+    
+      <li class="post">
+        <a href="/blog/2014/07/14/red-hat-rdo-on-brocade-ethernet-fabrics/">Red Hat RDO on Brocade Ethernet Fabrics</a>
+      </li>
+    
+  </ul>
+</section>
+
+<section>
+  <h1>GitHub Repos</h1>
+  <ul id="gh_repos">
+    <li class="loading">Status updating...</li>
+  </ul>
+  
+  <a href="https://github.com/jrametta">@jrametta</a> on GitHub
+  
+  <script type="text/javascript">
+    $(document).ready(function(){
+        if (!window.jXHR){
+            var jxhr = document.createElement('script');
+            jxhr.type = 'text/javascript';
+            jxhr.src = '/javascripts/libs/jXHR.js';
+            var s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(jxhr, s);
+        }
+
+        github.showRepos({
+            user: 'jrametta',
+            count: 0,
+            skip_forks: true,
+            target: '#gh_repos'
+        });
+    });
+  </script>
+  <script src="/javascripts/github.js" type="text/javascript"> </script>
+</section>
+
+
+
+
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2014 - Jeff Rametta -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+<script type="text/javascript">
+      var disqus_shortname = 'httpjramettagithubiothefabric';
+      
+        
+        // var disqus_developer = 1;
+        var disqus_identifier = 'http://jrametta.github.io/blog/2014/07/14/red-hat-rdo-on-brocade-ethernet-fabrics/';
+        var disqus_url = 'http://jrametta.github.io/blog/2014/07/14/red-hat-rdo-on-brocade-ethernet-fabrics/';
+        var disqus_script = 'embed.js';
+      
+    (function () {
+      var dsq = document.createElement('script'); dsq.type = 'text/javascript'; dsq.async = true;
+      dsq.src = '//' + disqus_shortname + '.disqus.com/' + disqus_script;
+      (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+    }());
+</script>
+
+
+
+
+
+
+
+  <script type="text/javascript">
+    (function(){
+      var twitterWidgets = document.createElement('script');
+      twitterWidgets.type = 'text/javascript';
+      twitterWidgets.async = true;
+      twitterWidgets.src = '//platform.twitter.com/widgets.js';
+      document.getElementsByTagName('head')[0].appendChild(twitterWidgets);
+    })();
+  </script>
+
+
+
+
+
+</body>
+</html>

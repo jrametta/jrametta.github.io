@@ -1,0 +1,279 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+
+  <title><![CDATA[Category: Rdo | The Fabric]]></title>
+  <link href="http://jrametta.github.io/blog/categories/rdo/atom.xml" rel="self"/>
+  <link href="http://jrametta.github.io/"/>
+  <updated>2014-07-20T02:42:18-07:00</updated>
+  <id>http://jrametta.github.io/</id>
+  <author>
+    <name><![CDATA[Jeff Rametta]]></name>
+    
+  </author>
+  <generator uri="http://octopress.org/">Octopress</generator>
+
+  
+  <entry>
+    <title type="html"><![CDATA[Red Hat RDO on Brocade Ethernet Fabrics]]></title>
+    <link href="http://jrametta.github.io/blog/2014/07/14/red-hat-rdo-on-brocade-ethernet-fabrics/"/>
+    <updated>2014-07-14T22:46:57-07:00</updated>
+    <id>http://jrametta.github.io/blog/2014/07/14/red-hat-rdo-on-brocade-ethernet-fabrics</id>
+    <content type="html"><![CDATA[<p>This short writup describes how to setup Red Hat&rsquo;s OpenStack RDO Havana release with the Brocade VCS plugin for Neutron networking.</p>
+
+<!--more-->
+
+
+<h2>INTRODUCTION</h2>
+
+<p>RDO can easily be deployed using Packstack and the Linux Bridge plugin.  Once complete, a few steps are
+required to reconfigure Neutron to use the Brocade VCS plugin for managing both virtual and physical network
+infrastructure through OpenStack API.</p>
+
+<p>This guide has been tested using CentOS 6.4, but should be applicable to other Red Hat based systems such as
+RHEL or Fedora.</p>
+
+<p>With the Havana release of OpenStack, we are still using the monolithic network plugin. Ice House release will
+introduce the use of the Modular Layer2 (ML2) plugin to simultaneously utilize the variety of layer 2
+networking technologies.</p>
+
+<h2>BROCADE VCS CONFIGURATION</h2>
+
+<p>Brocade VDX switches should be running NOS 4.0 or above with logical chassis mode enabled for configuration
+distribution across all fabric nodes.  See the Brocade NOS administrators guide for additional information.
+Any ports connected to OpenStack compute/network nodes should be configured as port-profile ports.</p>
+
+<p><code>
+VDX_84_186# show running-config interface GigabitEthernet 2/0/28
+interface GigabitEthernet 2/0/28
+  port-profile-port
+ no shutdown
+</code></p>
+
+<h2>RDO INSTALLATION USING PACKSTACK</h2>
+
+<p>This guide will walk through the process of deploying OpenStack on a single server with the option of adding
+one or more additional compute nodes.
+Begin by deploying OpenStack as documented in the RDO Neutron Quickstart guide at
+<a href="http://openstack.redhat.com/Neutron-Quickstart.">http://openstack.redhat.com/Neutron-Quickstart.</a>  Install the software repos, reboot the system, and install
+PackStack.</p>
+
+<p>```</p>
+
+<h1>yum install –y -y <a href="http://rdo.fedorapeople.org/openstack-grizzly/rdo-release-grizzly.rpm">http://rdo.fedorapeople.org/openstack-grizzly/rdo-release-grizzly.rpm</a></h1>
+
+<h1>yum -y update</h1>
+
+<h1>reboot</h1>
+
+<h1>sudo yum install -y openstack-PackStackack python-netaddr</h1>
+
+<p>```</p>
+
+<p>Generate a PackStack answer file and edit the following variables to enable the linuxbridge plugin.
+Additional compute nodes can be specified here as well.</p>
+
+<p>```</p>
+
+<h1>packstack &mdash;gen-answer-file=linuxbridge.answers</h1>
+
+<h1>vi linuxbridge.answers</h1>
+
+<p><code>
+</code>
+CONFIG_QUANTUM_L2_PLUGIN=linuxbridge
+CONFIG_QUANTUM_LB_VLAN_RANGES=physnet1:2:1000
+CONFIG_QUANTUM_LB_INTERFACE_MAPPINGS=physnet1:eth1
+CONFIG_NOVA_COMPUTE_HOSTS=10.17.95.6,10.17.88.130
+CONFIG_NOVA_NETWORK_PRIVIF=eth1
+CONFIG_NOVA_COMPUTE_PRIVIF=eth1
+```</p>
+
+<p>Edit the configuration for  the physical interface connected to the VCS fabric for tenant networks.  It should
+be configured up with no IP address and in promiscuous mode.  All nodes should have a similar configuration.</p>
+
+<p><code>
+DEVICE="eth1"
+BOOTPROTO=static
+ONBOOT="yes"
+TYPE="Ethernet"
+</code></p>
+
+<p>One method to configure the interface for promiscuous mode at boot, is to create /sbin/ifup-local with the
+following content</p>
+
+<p>```</p>
+
+<h1>!/bin/bash</h1>
+
+<p>if [[ &ldquo;$1&rdquo; == &ldquo;eth1&rdquo; ]]
+then
+  /sbin/ifconfig $1 promisc
+  RC=$?
+fi
+```</p>
+
+<p>Set executable bit.  This script will run during boot right after network interfaces are brought online.</p>
+
+<p>```</p>
+
+<h1>chmod +x /sbin/ifup-local</h1>
+
+<h1>/etc/init.d/network restart</h1>
+
+<p>```</p>
+
+<p>Run packstack on the controller node using the previously created answer file</p>
+
+<p>```</p>
+
+<h1>packstack &mdash;answer-file=linuxbridge.answers</h1>
+
+<p>```</p>
+
+<p>Once complete, edit /etc/ImageMagick//quantum/l3_agent.ini on the controller and remove br-ex from the
+following line (it should be set to nothing)
+<code>
+external_network_bridge =
+</code></p>
+
+<p>Download and install a test image into glance
+```</p>
+
+<h1>wget -c <a href="https://launchpad.net/cirros/trunk/0.3.0/+download/cirros-0.3.0-x86_64-disk.img">https://launchpad.net/cirros/trunk/0.3.0/+download/cirros-0.3.0-x86_64-disk.img</a></h1>
+
+<h1>glance image-create &mdash;name=cirros-0.3.0-x86_64 &mdash;disk-format=qcow2  \</h1>
+
+<p>   &mdash;container-format=bare &lt; cirros-0.3.0-x86_64-disk.img
+```</p>
+
+<h2>INSTALL BROCADE NEUTRON PLUGIN</h2>
+
+<p>To simplify installation, all existing nova instances, networks, and routers should be deleted. Install the
+Brocade plugin from the repository on the controller/network node.
+```</p>
+
+<h1>yum install openstack-quantum-brocade`</h1>
+
+<p>```</p>
+
+<p>Edit /etc/quantum/plugins/brocade/brocade.ini file on the controller/network node.  The database user and
+password can be copied from the packstack answer file or preexisting linuxbridge.ini.  Ensure the database
+user has proper credentials.
+```
+[SWITCH]
+username = admin
+password = password
+address  = 10.254.8.5
+ostype   = NOS</p>
+
+<p>[DATABASE]
+sql_connection = mysql://root:75ddb50b165b4ed0@localhost/brcd_quantum?charset=utf8</p>
+
+<p>[PHYSICAL_INTERFACE]
+physical_interface = physnet1</p>
+
+<p>[VLANS]
+network_vlan_ranges = physnet1:1000:2999</p>
+
+<p>[AGENT]
+root_helper = sudo /usr/bin/quantum-rootwrap /etc/quantum/rootwrap.conf</p>
+
+<p>[LINUX_BRIDGE]
+physical_interface_mappings = physnet1:eth0
+```</p>
+
+<p>On the controller, create brcd_quantum database and grant permissions (change IP address and passwords as
+needed).
+```</p>
+
+<h1>mysql &lt;&lt; EOF</h1>
+
+<p>CREATE DATABASE brcd_quantum;
+GRANT ALL PRIVILEGES ON quantum.<em> TO &lsquo;quantum&rsquo;@&lsquo;localhost&rsquo; \
+IDENTIFIED BY &lsquo;password&rsquo;;
+GRANT ALL PRIVILEGES ON quantum.</em> TO &lsquo;quantum&rsquo;@&lsquo;10.17.88.130&rsquo; \
+IDENTIFIED BY &lsquo;password&rsquo;;
+FLUSH PRIVILEGES;
+EOF
+```</p>
+
+<p>Set the core plugin to Brocade in quantum.conf on all nodes.
+core_plugin = quantum.plugins.brocade.QuantumPlugin.BrocadePluginV2</p>
+
+<p>On the controller,QuantumPlugin install the netconf client needed to communicate with the VCS fabric
+```</p>
+
+<h1>git clone <a href="https://code.grnet.gr/git/ncclient">https://code.grnet.gr/git/ncclient</a></h1>
+
+<h1>cd ncclient &amp;&amp; python setup.py install</h1>
+
+<p>```</p>
+
+<p>On the controller, update the symlink in /etc/quantum to point to the brocade.ini file
+```</p>
+
+<h1>rm plugin.ini &amp;&amp; ln -s  /etc/quantum/plugins/brocade/brocade.ini plugin.ini</h1>
+
+<p>```</p>
+
+<p>Disable or remove the OVS agent if it is installed.  Reboot the system and verify working status.</p>
+
+<h2>TESTING THINGS OUT</h2>
+
+<p>Source the keystone rc file that was installed into root’s home directory to obtain credentials and verify
+status of OpenStack services.<br/>
+```</p>
+
+<h1>. ~/ keystonerc_admin</h1>
+
+<h1>openstack-status</h1>
+
+<h1>quantum agent-list</h1>
+
+<p><code>
+Then use the CLI or Horizon to create networks, and launch new virtual machine instances.  Within the VCS
+fabric, check that new port-profiles are created for every tenant network that is created.  
+</code>
+VDX_84_186# show port-profile
+port-profile default
+ppid 0
+ vlan-profile
+  switchport
+  switchport mode trunk
+  switchport trunk allowed vlan all
+  switchport trunk native-vlan 1
+port-profile openstack-profile-2
+ppid 1
+ vlan-profile
+  switchport
+  switchport mode trunk
+  switchport trunk allowed vlan add 2
+port-profile openstack-profile-3
+ppid 2
+ vlan-profile
+  switchport
+  switchport mode trunk
+  switchport trunk allowed vlan add 3
+```</p>
+
+<p>As new instances are launched, they should be tied to the port-profile corresponding to the network they
+belong to.  Any instances on the same network should be able to communicate with each other.
+```
+VDX_84_186# show port-profile status
+Port-Profile                        PPID        Activated        Associated MAC        Interface
+openstack-profile-2                 1           Yes              fa16.3e1b.95d0        None</p>
+
+<pre><code>                                                             fa16.3e64.fce8        Gi 2/0/28
+                                                             fa16.3e85.5b2f        Gi 2/0/28
+                                                             fa16.3ea6.3741        Gi 2/0/5
+                                                             fa16.3ecd.bfc1        Gi 2/0/5
+                                                             fa16.3eeb.87f7        Gi 2/0/28
+</code></pre>
+
+<p>openstack-profile-3                 2           Yes              fa16.3e2c.0baf        None</p>
+
+<p>```</p>
+]]></content>
+  </entry>
+  
+</feed>

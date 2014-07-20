@@ -1,0 +1,451 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>OpenStack Live Migration - The Fabric</title>
+  <meta name="author" content="Jeff Rametta">
+
+  
+  <meta name="description" content="Live migration in the cloud can be useful at times as it can minimize downtime during maintenence and move
+instances from overloaded compute nodes. A &hellip;">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="http://jrametta.github.io/blog/2014/07/16/openstack-live-migration">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="The Fabric" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="//ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.min.js"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">The Fabric</a></h1>
+  
+    <h2>Jeff Rametta | Yet Another Cloud and Networking Blog</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:jrametta.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">OpenStack Live Migration</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+
+
+
+  
+
+
+<time datetime="2014-07-16T21:52:20-07:00" pubdate data-updated="true">Jul 16<sup>th</sup>, 2014</time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><p>Live migration in the cloud can be useful at times as it can minimize downtime during maintenence and move
+instances from overloaded compute nodes.  A little while back I setup a devstack cluster with a shared NFS
+filesystem to perform live migration of OpenStack instances from one compute node to another using KVM
+hypervisors.</p>
+
+<!--more-->
+
+
+<p>When using the Brocade VCS plugin for OpenStack Neutron, the tenant network VLAN configuration is
+automatically updated in the physical network when a new instance is created and also when it is moved to
+another compute node.  This enables live migration without needing to make any changes to the network.</p>
+
+<p>In this writeup I describe the process to reconfigure an existing 2-node Icehouse devstack deployment to
+support shared storage-based live migration on OpenStack instances using an NFS server.  If you don&rsquo;t already
+have a working devstack setup,
+take a look at <a href="http://jrametta.github.io/the-fabric/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin">this post</a> using Ubuntu.</p>
+
+<h2>NFS Server Configuration</h2>
+
+<p>I built a simple NFS server using Ubuntu. Install the software package and prepare a directory to
+export.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>$ sudo apt-get install nfs-kernel-server
+</span><span class='line'>$ sudo mkdir -p /srv/demo-stack/instances
+</span><span class='line'>$ sudo chmod o+x /srv/demo-stack/instances
+</span><span class='line'>$ sudo chown stack:stack /srv/demo-stack/instances</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Add an entry like the one below into <code>/etc/exports</code> and then export the directory via <code>sudo exportfs -ra</code></p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>/srv/demo-stack/instances 10.254.0.0/20(rw,fsid=0,insecure,no_subtree_check,async,no_root_squash)</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>OpenStack Node Configuration</h2>
+
+<p>Each of the devstack nodes will be NFS clients.  Setup a directory and mount the remote filesystem.
+Optionally add the mount point to your <code>/etc/fstab</code> so it persists after reboot.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>mkdir -p /opt/stack/data/instances
+</span><span class='line'>sudo apt-get install rpcbind nfs-common
+</span><span class='line'>sudo mount 10.254.15.12:/srv/demo-stack/instances /opt/stack/data/instances</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Several changes to libvirt were made to enable migration.  Edit <code>/etc/libvirt/libvirtd.conf</code> to include the
+following</p>
+
+<p>&nbsp;&nbsp;   &ndash; listen_tls = 0<br/>
+&nbsp;&nbsp;   &ndash; listen_tcp = 1<br/>
+&nbsp;&nbsp;   &ndash; auth_tcp = &ldquo;none&rdquo;</p>
+
+<p>Edit libvirtd options in <code>/etc/default/libvirt-bin</code> to listen over tcp</p>
+
+<p>&nbsp;&nbsp;   &ndash; libvirtd_opts = &ldquo; -d -l&rdquo;</p>
+
+<p>Restart libvirt</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>sudo service libvirt-bin  restart</span></code></pre></td></tr></table></div></figure>
+
+
+<p>The final configuration is to make sure the VNC server listens on all interfaces and the path to hold the nova
+images is set to the mounted NFS directory.  This can be done by adding the following lines to devstack&rsquo;s
+local.conf</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># set this for live migration
+</span><span class='line'>VNCSERVER_LISTEN=0.0.0.0
+</span><span class='line'>NOVA_INSTANCES_PATH=/opt/stack/data/instances</span></code></pre></td></tr></table></div></figure>
+
+
+<p>That should be it- run stack.sh and make sure everything is up and running properly.</p>
+
+<h2>Testing things out</h2>
+
+<p>Launch an instance in the cloud using Horizon or the CLI.  You can check which compute node the instance lives
+on using nova commands (currently it resides on icehouse1)</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>stack@icehouse1:~/devstack$ nova-manage vm list   | awk '{print $1,$2,$4,$5}' | column -t
+</span><span class='line'>instance   node       state   launched
+</span><span class='line'>instance1  icehouse1  active  2014-07-17</span></code></pre></td></tr></table></div></figure>
+
+
+<p>If you take a look at the VCS fabric, you can find the physical port in the network for the compute node
+node hosting this instance based on it&rsquo;s mac address (in my case port Gi 5/0/7).</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>openstack-rb5# show port-profile status
+</span><span class='line'>Port-Profile                        PPID        Activated        Associated MAC        Interface
+</span><span class='line'>openstack-profile-901               1           Yes              fa16.3e0e.265d        None
+</span><span class='line'>                                                                 fa16.3e98.c835        Gi 5/0/7
+</span><span class='line'>                                                                 fa16.3ee7.91bb        None
+</span><span class='line'>openstack-profile-902               2           Yes              fa16.3eee.5fe1        None</span></code></pre></td></tr></table></div></figure>
+
+
+<p>You&rsquo;ll notice it belongs to openstack-profile-901.  If you examine the configuration for this port-profile,
+you can see the VLAN association.  Any instances in this particular tenant network will be carried on VLAN 901
+as the traffic traverses the VCS fabric.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>openstack-rb5# show port-profile name openstack-profile-901
+</span><span class='line'>port-profile openstack-profile-901
+</span><span class='line'>ppid 1
+</span><span class='line'> vlan-profile
+</span><span class='line'>  switchport
+</span><span class='line'>  switchport mode trunk
+</span><span class='line'>  switchport trunk allowed vlan add 901</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Run the nova live-migration command to move the VM to another compute node.  I ran a continuous ping from the
+instance to another server to see if any packets were dropped during the migration.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>stack@icehouse1:~/devstack$ nova live-migration instance1 icehouse2
+</span><span class='line'>stack@icehouse1:~/devstack$
+</span><span class='line'>stack@icehouse1:~/devstack$ nova list
+</span><span class='line'>+--------------------------------------+-----------+-----------+------------+-------------+---------------------+
+</span><span class='line'>| ID                                   | Name      | Status    | Task State | Power State | Networks            |
+</span><span class='line'>+--------------------------------------+-----------+-----------+------------+-------------+---------------------+
+</span><span class='line'>| 77df10d1-90da-4f88-91ed-dc360ce7733c | instance1 | MIGRATING | migrating  | Running     | private=192.168.0.2 |
+</span><span class='line'>+--------------------------------------+-----------+-----------+------------+-------------+---------------------+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Looging at the VCS fabric again after a few moments, you should see that the instance has moved to another
+OpenStack compute node (it&rsquo;s now on port Gi 6/0/7)</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>openstack-rb5# show port-p status
+</span><span class='line'>Port-Profile                        PPID        Activated        Associated MAC        Interface
+</span><span class='line'>openstack-profile-901               1           Yes              fa16.3e0e.265d        None
+</span><span class='line'>                                                                 fa16.3e98.c835        Gi 6/0/7
+</span><span class='line'>                                                                 fa16.3ee7.91bb        None
+</span><span class='line'>openstack-profile-902               2           Yes              fa16.3eee.5fe1        None
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Running nova show confirms the migration has taken place.  If you check the instance, you should see that no
+pings were lost during the move.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>stack@icehouse1:~/devstack$ nova-manage vm list   | awk '{print $1,$2,$4,$5}' | column -t
+</span><span class='line'>instance   node       state   launched
+</span><span class='line'>instance1  icehouse2  active  2014-07-17</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Congratulations, you have successfully performed a live migration of an OpenStack instance with zero downtime
+;)</p>
+
+<h2>References</h2>
+
+<ul>
+<li><a href="http://docs.openstack.org/trunk/config-reference/content/section_configuring-compute-migrations.html">http://docs.openstack.org/trunk/config-reference/content/section_configuring-compute-migrations.html</a></li>
+</ul>
+
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Jeff Rametta</span></span>
+
+      
+
+
+
+
+
+
+
+
+  
+
+
+<time datetime="2014-07-16T21:52:20-07:00" pubdate data-updated="true">Jul 16<sup>th</sup>, 2014</time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/brocade/'>brocade</a>, <a class='category' href='/blog/categories/openstack/'>openstack</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  <a href="//twitter.com/share" class="twitter-share-button" data-url="http://jrametta.github.io/blog/2014/07/16/openstack-live-migration/" data-via="" data-counturl="http://jrametta.github.io/blog/2014/07/16/openstack-live-migration/" >Tweet</a>
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin/" title="Previous Post: Devstack Icehouse with Brocade ML2 Plugin">&laquo; Devstack Icehouse with Brocade ML2 Plugin</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+  <h1>Recent Posts</h1>
+  <ul id="recent_posts">
+    
+      <li class="post">
+        <a href="/blog/2014/07/16/openstack-live-migration/">OpenStack Live Migration</a>
+      </li>
+    
+      <li class="post">
+        <a href="/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin/">Devstack Icehouse With Brocade ML2 Plugin</a>
+      </li>
+    
+      <li class="post">
+        <a href="/blog/2014/07/14/red-hat-rdo-on-brocade-ethernet-fabrics/">Red Hat RDO on Brocade Ethernet Fabrics</a>
+      </li>
+    
+  </ul>
+</section>
+
+<section>
+  <h1>GitHub Repos</h1>
+  <ul id="gh_repos">
+    <li class="loading">Status updating...</li>
+  </ul>
+  
+  <a href="https://github.com/jrametta">@jrametta</a> on GitHub
+  
+  <script type="text/javascript">
+    $(document).ready(function(){
+        if (!window.jXHR){
+            var jxhr = document.createElement('script');
+            jxhr.type = 'text/javascript';
+            jxhr.src = '/javascripts/libs/jXHR.js';
+            var s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(jxhr, s);
+        }
+
+        github.showRepos({
+            user: 'jrametta',
+            count: 0,
+            skip_forks: true,
+            target: '#gh_repos'
+        });
+    });
+  </script>
+  <script src="/javascripts/github.js" type="text/javascript"> </script>
+</section>
+
+
+
+
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2014 - Jeff Rametta -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+<script type="text/javascript">
+      var disqus_shortname = 'httpjramettagithubiothefabric';
+      
+        
+        // var disqus_developer = 1;
+        var disqus_identifier = 'http://jrametta.github.io/blog/2014/07/16/openstack-live-migration/';
+        var disqus_url = 'http://jrametta.github.io/blog/2014/07/16/openstack-live-migration/';
+        var disqus_script = 'embed.js';
+      
+    (function () {
+      var dsq = document.createElement('script'); dsq.type = 'text/javascript'; dsq.async = true;
+      dsq.src = '//' + disqus_shortname + '.disqus.com/' + disqus_script;
+      (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+    }());
+</script>
+
+
+
+
+
+
+
+  <script type="text/javascript">
+    (function(){
+      var twitterWidgets = document.createElement('script');
+      twitterWidgets.type = 'text/javascript';
+      twitterWidgets.async = true;
+      twitterWidgets.src = '//platform.twitter.com/widgets.js';
+      document.getElementsByTagName('head')[0].appendChild(twitterWidgets);
+    })();
+  </script>
+
+
+
+
+
+</body>
+</html>

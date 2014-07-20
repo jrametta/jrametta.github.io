@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
 
-  <title><![CDATA[My Octopress Blog]]></title>
+  <title><![CDATA[The Fabric]]></title>
   <link href="http://jrametta.github.io/atom.xml" rel="self"/>
   <link href="http://jrametta.github.io/"/>
-  <updated>2014-07-20T02:26:59-07:00</updated>
+  <updated>2014-07-20T02:42:18-07:00</updated>
   <id>http://jrametta.github.io/</id>
   <author>
     <name><![CDATA[Jeff Rametta]]></name>
@@ -12,5 +12,935 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[OpenStack Live Migration]]></title>
+    <link href="http://jrametta.github.io/blog/2014/07/16/openstack-live-migration/"/>
+    <updated>2014-07-16T21:52:20-07:00</updated>
+    <id>http://jrametta.github.io/blog/2014/07/16/openstack-live-migration</id>
+    <content type="html"><![CDATA[<p>Live migration in the cloud can be useful at times as it can minimize downtime during maintenence and move
+instances from overloaded compute nodes.  A little while back I setup a devstack cluster with a shared NFS
+filesystem to perform live migration of OpenStack instances from one compute node to another using KVM
+hypervisors.</p>
+
+<!--more-->
+
+
+<p>When using the Brocade VCS plugin for OpenStack Neutron, the tenant network VLAN configuration is
+automatically updated in the physical network when a new instance is created and also when it is moved to
+another compute node.  This enables live migration without needing to make any changes to the network.</p>
+
+<p>In this writeup I describe the process to reconfigure an existing 2-node Icehouse devstack deployment to
+support shared storage-based live migration on OpenStack instances using an NFS server.  If you don&rsquo;t already
+have a working devstack setup,
+take a look at <a href="http://jrametta.github.io/the-fabric/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin">this post</a> using Ubuntu.</p>
+
+<h2>NFS Server Configuration</h2>
+
+<p>I built a simple NFS server using Ubuntu. Install the software package and prepare a directory to
+export.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>$ sudo apt-get install nfs-kernel-server
+</span><span class='line'>$ sudo mkdir -p /srv/demo-stack/instances
+</span><span class='line'>$ sudo chmod o+x /srv/demo-stack/instances
+</span><span class='line'>$ sudo chown stack:stack /srv/demo-stack/instances</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Add an entry like the one below into <code>/etc/exports</code> and then export the directory via <code>sudo exportfs -ra</code></p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>/srv/demo-stack/instances 10.254.0.0/20(rw,fsid=0,insecure,no_subtree_check,async,no_root_squash)</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>OpenStack Node Configuration</h2>
+
+<p>Each of the devstack nodes will be NFS clients.  Setup a directory and mount the remote filesystem.
+Optionally add the mount point to your <code>/etc/fstab</code> so it persists after reboot.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>mkdir -p /opt/stack/data/instances
+</span><span class='line'>sudo apt-get install rpcbind nfs-common
+</span><span class='line'>sudo mount 10.254.15.12:/srv/demo-stack/instances /opt/stack/data/instances</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Several changes to libvirt were made to enable migration.  Edit <code>/etc/libvirt/libvirtd.conf</code> to include the
+following</p>
+
+<p>&nbsp;&nbsp;   &ndash; listen_tls = 0<br/>
+&nbsp;&nbsp;   &ndash; listen_tcp = 1<br/>
+&nbsp;&nbsp;   &ndash; auth_tcp = &ldquo;none&rdquo;</p>
+
+<p>Edit libvirtd options in <code>/etc/default/libvirt-bin</code> to listen over tcp</p>
+
+<p>&nbsp;&nbsp;   &ndash; libvirtd_opts = &ldquo; -d -l&rdquo;</p>
+
+<p>Restart libvirt</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>sudo service libvirt-bin  restart</span></code></pre></td></tr></table></div></figure>
+
+
+<p>The final configuration is to make sure the VNC server listens on all interfaces and the path to hold the nova
+images is set to the mounted NFS directory.  This can be done by adding the following lines to devstack&rsquo;s
+local.conf</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># set this for live migration
+</span><span class='line'>VNCSERVER_LISTEN=0.0.0.0
+</span><span class='line'>NOVA_INSTANCES_PATH=/opt/stack/data/instances</span></code></pre></td></tr></table></div></figure>
+
+
+<p>That should be it- run stack.sh and make sure everything is up and running properly.</p>
+
+<h2>Testing things out</h2>
+
+<p>Launch an instance in the cloud using Horizon or the CLI.  You can check which compute node the instance lives
+on using nova commands (currently it resides on icehouse1)</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>stack@icehouse1:~/devstack$ nova-manage vm list   | awk '{print $1,$2,$4,$5}' | column -t
+</span><span class='line'>instance   node       state   launched
+</span><span class='line'>instance1  icehouse1  active  2014-07-17</span></code></pre></td></tr></table></div></figure>
+
+
+<p>If you take a look at the VCS fabric, you can find the physical port in the network for the compute node
+node hosting this instance based on it&rsquo;s mac address (in my case port Gi 5/0/7).</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>openstack-rb5# show port-profile status
+</span><span class='line'>Port-Profile                        PPID        Activated        Associated MAC        Interface
+</span><span class='line'>openstack-profile-901               1           Yes              fa16.3e0e.265d        None
+</span><span class='line'>                                                                 fa16.3e98.c835        Gi 5/0/7
+</span><span class='line'>                                                                 fa16.3ee7.91bb        None
+</span><span class='line'>openstack-profile-902               2           Yes              fa16.3eee.5fe1        None</span></code></pre></td></tr></table></div></figure>
+
+
+<p>You&rsquo;ll notice it belongs to openstack-profile-901.  If you examine the configuration for this port-profile,
+you can see the VLAN association.  Any instances in this particular tenant network will be carried on VLAN 901
+as the traffic traverses the VCS fabric.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>openstack-rb5# show port-profile name openstack-profile-901
+</span><span class='line'>port-profile openstack-profile-901
+</span><span class='line'>ppid 1
+</span><span class='line'> vlan-profile
+</span><span class='line'>  switchport
+</span><span class='line'>  switchport mode trunk
+</span><span class='line'>  switchport trunk allowed vlan add 901</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Run the nova live-migration command to move the VM to another compute node.  I ran a continuous ping from the
+instance to another server to see if any packets were dropped during the migration.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>stack@icehouse1:~/devstack$ nova live-migration instance1 icehouse2
+</span><span class='line'>stack@icehouse1:~/devstack$
+</span><span class='line'>stack@icehouse1:~/devstack$ nova list
+</span><span class='line'>+--------------------------------------+-----------+-----------+------------+-------------+---------------------+
+</span><span class='line'>| ID                                   | Name      | Status    | Task State | Power State | Networks            |
+</span><span class='line'>+--------------------------------------+-----------+-----------+------------+-------------+---------------------+
+</span><span class='line'>| 77df10d1-90da-4f88-91ed-dc360ce7733c | instance1 | MIGRATING | migrating  | Running     | private=192.168.0.2 |
+</span><span class='line'>+--------------------------------------+-----------+-----------+------------+-------------+---------------------+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Looging at the VCS fabric again after a few moments, you should see that the instance has moved to another
+OpenStack compute node (it&rsquo;s now on port Gi 6/0/7)</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>openstack-rb5# show port-p status
+</span><span class='line'>Port-Profile                        PPID        Activated        Associated MAC        Interface
+</span><span class='line'>openstack-profile-901               1           Yes              fa16.3e0e.265d        None
+</span><span class='line'>                                                                 fa16.3e98.c835        Gi 6/0/7
+</span><span class='line'>                                                                 fa16.3ee7.91bb        None
+</span><span class='line'>openstack-profile-902               2           Yes              fa16.3eee.5fe1        None
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Running nova show confirms the migration has taken place.  If you check the instance, you should see that no
+pings were lost during the move.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>stack@icehouse1:~/devstack$ nova-manage vm list   | awk '{print $1,$2,$4,$5}' | column -t
+</span><span class='line'>instance   node       state   launched
+</span><span class='line'>instance1  icehouse2  active  2014-07-17</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Congratulations, you have successfully performed a live migration of an OpenStack instance with zero downtime
+;)</p>
+
+<h2>References</h2>
+
+<ul>
+<li><a href="http://docs.openstack.org/trunk/config-reference/content/section_configuring-compute-migrations.html">http://docs.openstack.org/trunk/config-reference/content/section_configuring-compute-migrations.html</a></li>
+</ul>
+
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[Devstack Icehouse With Brocade ML2 Plugin]]></title>
+    <link href="http://jrametta.github.io/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin/"/>
+    <updated>2014-07-15T00:21:31-07:00</updated>
+    <id>http://jrametta.github.io/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin</id>
+    <content type="html"><![CDATA[<p><a href="http://devstack.org">Devstack</a> is a scripted installation of OpenStack that can be used for development or
+demo purposes.  This writeup covers a simple two node devstack installation using the Brocade VCS plugin for
+OpenStack networking (aka Neutron).</p>
+
+<!--more-->
+
+
+<p>The VCS ML2 plugin supports both Open vSwitch and Linux Bridge agents and realizes tenant networks as
+port-profiles in the physical network infrastructure.  A port-profile in a Brocade Ethernet fabric is like a
+network policy for VMs or OpenStack instances and can contain information like VLAN assignment, QoS
+information, and ACLs.  Because tenant networks are provisioned end-to-end, no additional networking setup is
+required anywhere in the network.</p>
+
+<h2>Deployment Topology</h2>
+
+<p>My hardware environment is pretty simple.  I have two servers on which to run OpenStack &ndash; one will be a
+controller/compute node, the other will just be a compute node.</p>
+
+<p><img src="http://jrametta.github.io/images/os_topo.png"></p>
+
+<h2>Server Configuration</h2>
+
+<p>I used Ubuntu Precise as the OS platform.  The network interfaces were configured as below on the controller.
+Compute node is similar.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># The loopback network interface
+</span><span class='line'>auto lo
+</span><span class='line'>iface lo inet loopback
+</span><span class='line'>
+</span><span class='line'># The primary network interface
+</span><span class='line'>auto eth0
+</span><span class='line'>iface eth0 inet static
+</span><span class='line'>address 10.17.88.129
+</span><span class='line'>netmask 255.255.240.0
+</span><span class='line'>gateway 10.17.80.1
+</span><span class='line'>dns-nameservers 10.17.80.21
+</span><span class='line'>
+</span><span class='line'># Private tenant network interface (connected to VCS fabric)
+</span><span class='line'>auto eth1
+</span><span class='line'>iface eth1 inet manual
+</span><span class='line'>up ifconfig eth1 up promisc</span></code></pre></td></tr></table></div></figure>
+
+
+<p>The VCS plugin currently uses NETCONF for communication with the Ethernet fabric and the ncclient python library
+is required on the controller node.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># git clone https://code.grnet.gr/git/ncclient
+</span><span class='line'># cd ncclient && python ./setup.py install</span></code></pre></td></tr></table></div></figure>
+
+
+<p>OpenStack runs as a non-root user that has sudo privileges. I usually have a user already setup, but devstack
+will create a new user if you try to run stack.sh as root.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># adduser stack
+</span><span class='line'># echo "stack ALL=(ALL) NOPASSWD: ALL" &gt;&gt; /etc/sudoers</span></code></pre></td></tr></table></div></figure>
+
+
+<p>As stack user, install this devstack repo in the home directory</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># git clone https://github.com/openstack-dev/devstack.git
+</span><span class='line'># cd devstack</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>Configuring Devstack</h2>
+
+<p>Controller node local.conf</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+<span class='line-number'>51</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>[[local|localrc]]
+</span><span class='line'># MISC
+</span><span class='line'># RECLONE=yes
+</span><span class='line'># OFFLINE=False
+</span><span class='line'>
+</span><span class='line'># Branch/Repos
+</span><span class='line'>NOVA_BRANCH=stable/icehouse
+</span><span class='line'>GLANCE_BRANCH=stable/icehouse
+</span><span class='line'>HORIZON_BRANCH=stable/icehouse
+</span><span class='line'>KEYSTONE_BRANCH=stable/icehouse
+</span><span class='line'>QUANTUM_BRANCH=stable/icehouse
+</span><span class='line'>NEUTRON_BRANCH=stable/icehouse
+</span><span class='line'>CEILOMETER_BRANCH=stable/icehouse
+</span><span class='line'>HEAT_BRANCH=stable/icehouse
+</span><span class='line'>
+</span><span class='line'>disable_service n-net
+</span><span class='line'>enable_service g-api g-reg key n-crt n-obj n-cpu n-cond n-sch horizon
+</span><span class='line'>
+</span><span class='line'># Neutron services (enable)
+</span><span class='line'>enable_service neutron q-svc q-agt q-dhcp q-meta q-l3
+</span><span class='line'>Q_PLUGIN_CLASS=neutron.plugins.ml2.plugin.Ml2Plugin
+</span><span class='line'>Q_PLUGIN_EXTRA_CONF_FILES=ml2_conf_brocade.ini
+</span><span class='line'>Q_PLUGIN_EXTRA_CONF_PATH=/home/stack/devstack
+</span><span class='line'>Q_ML2_PLUGIN_MECHANISM_DRIVERS=openvswitch,brocade
+</span><span class='line'>Q_ML2_PLUGIN_TYPE_DRIVERS=${Q_ML2_PLUGIN_TYPE_DRIVERS:-local,flat,vlan,gre,vxlan}
+</span><span class='line'>ENABLE_TENANT_VLANS="True"
+</span><span class='line'>PHYSICAL_NETWORK="phys1"
+</span><span class='line'>TENANT_VLAN_RANGE=901:950
+</span><span class='line'>OVS_PHYSICAL_BRIDGE=br-eth1
+</span><span class='line'>
+</span><span class='line'>ADMIN_PASSWORD=openstack
+</span><span class='line'>DATABASE_PASSWORD=$ADMIN_PASSWORD
+</span><span class='line'>RABBIT_PASSWORD=$ADMIN_PASSWORD
+</span><span class='line'>SERVICE_PASSWORD=$ADMIN_PASSWORD
+</span><span class='line'>SERVICE_TOKEN=$ADMIN_PASSWORD
+</span><span class='line'>MYSQL_PASSWORD=$ADMIN_PASSWORD
+</span><span class='line'>
+</span><span class='line'>DEST=/opt/stack
+</span><span class='line'>LOG=True
+</span><span class='line'>LOGFILE=stack.sh.log
+</span><span class='line'>LOGDAYS=1
+</span><span class='line'>HOST_NAME=$(hostname)
+</span><span class='line'>SERVICE_HOST=10.17.88.129
+</span><span class='line'>HOST_IP=10.17.88.129
+</span><span class='line'>MYSQL_HOST=$SERVICE_HOST
+</span><span class='line'>RABBIT_HOST=$SERVICE_HOST
+</span><span class='line'>GLANCE_HOSTPORT=$SERVICE_HOST:9292
+</span><span class='line'>KEYSTONE_AUTH_HOST=$SERVICE_HOST
+</span><span class='line'>KEYSTONE_SERVICE_HOST=$SERVICE_HOST
+</span><span class='line'>SCHEDULER=nova.scheduler.filter_scheduler.FilterScheduler
+</span><span class='line'>SCREEN_HARDSTATUS="%{= Kw}%-w%{BW}%n %t%{-}%+w"
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>The controller node should also contain an ML2 configuration file ml2_conf_brocade.ini identifying
+the authentication credentials
+and management virtual IP for the VCS fabric.  The location of this file (usually somewhere in
+/etc/neutron/plugins), but should be specified via the <code>Q_PLUGIN_EXTRA_CONF_PATH</code> parameter in local.conf above.
+I happened to just place it in stack&rsquo;s home directory.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>[ml2_brocade]
+</span><span class='line'>username = admin
+</span><span class='line'>password = password
+</span><span class='line'>address  = 172.27.116.32
+</span><span class='line'>ostype   = NOS
+</span><span class='line'>physical_networks = phys1</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Compute node local.conf</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>[[local|localrc]]
+</span><span class='line'>
+</span><span class='line'># MISC
+</span><span class='line'># RECLONE=yes
+</span><span class='line'># OFFLINE=True
+</span><span class='line'>
+</span><span class='line'># Branch/Repos
+</span><span class='line'>NOVA_BRANCH=stable/icehouse
+</span><span class='line'>GLANCE_BRANCH=stable/icehouse
+</span><span class='line'>HORIZON_BRANCH=stable/icehouse
+</span><span class='line'>KEYSTONE_BRANCH=stable/icehouse
+</span><span class='line'>QUANTUM_BRANCH=stable/icehouse
+</span><span class='line'>NEUTRON_BRANCH=stable/icehouse
+</span><span class='line'>
+</span><span class='line'>disable_service n-net
+</span><span class='line'>ENABLED_SERVICES=n-cpu,rabbit,quantum,q-agt,n-novnc
+</span><span class='line'>
+</span><span class='line'>Q_PLUGIN=ml2
+</span><span class='line'>Q_AGENT=openvswitch
+</span><span class='line'>ENABLE_TENANT_VLANS="True"
+</span><span class='line'>PHYSICAL_NETWORK="phys1"
+</span><span class='line'>TENANT_VLAN_RANGE=901:950
+</span><span class='line'>OVS_PHYSICAL_BRIDGE=br-eth1
+</span><span class='line'>
+</span><span class='line'>ADMIN_PASSWORD=openstack
+</span><span class='line'>DATABASE_PASSWORD=$ADMIN_PASSWORD
+</span><span class='line'>RABBIT_PASSWORD=$ADMIN_PASSWORD
+</span><span class='line'>SERVICE_PASSWORD=$ADMIN_PASSWORD
+</span><span class='line'>SERVICE_TOKEN=$ADMIN_PASSWORD
+</span><span class='line'>MYSQL_PASSWORD=$ADMIN_PASSWORD
+</span><span class='line'>
+</span><span class='line'>DEST=/opt/stack
+</span><span class='line'>LOG=True
+</span><span class='line'>LOGFILE=stack.sh.log
+</span><span class='line'>LOGDAYS=1
+</span><span class='line'>HOST_NAME=$(hostname)
+</span><span class='line'>SERVICE_HOST=10.17.88.129
+</span><span class='line'>HOST_IP=10.17.88.130
+</span><span class='line'>MYSQL_HOST=$SERVICE_HOST
+</span><span class='line'>RABBIT_HOST=$SERVICE_HOST
+</span><span class='line'>GLANCE_HOSTPORT=$SERVICE_HOST:9292
+</span><span class='line'>KEYSTONE_AUTH_HOST=$SERVICE_HOST
+</span><span class='line'>KEYSTONE_SERVICE_HOST=$SERVICE_HOST
+</span><span class='line'>SCHEDULER=nova.scheduler.filter_scheduler.FilterScheduler
+</span><span class='line'>
+</span><span class='line'>VNCSERVER_LISTEN=$HOST_IP
+</span><span class='line'>VNCSERVER_PROXYCLIENT_ADDRESS=$HOST_IP
+</span><span class='line'>
+</span><span class='line'>SCREEN_HARDSTATUS="%{= Kw}%-w%{BW}%n %t%{-}%+w"</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>Testing Things Out</h2>
+
+<p>Source the openrc in the devstack directory to obtain credentials and use the CLI to have a look around,
+create networks, and launch new virtual machine instances. Alternatively, login to the Horizon dashboard at
+<a href="http://controlerNodeIP">http://controlerNodeIP</a> and use the GUI (user: admin or demo, password: openstack).</p>
+
+<p>Within the VCS fabric, check that new port-profiles are created for every tenant network that is created. Two
+new port-profiles should exist after running stack.sh for the first time.  These corrospond to the initial
+pubic and private networks that the devstack script creates.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>DX1# show port-profile
+</span><span class='line'>port-profile default
+</span><span class='line'>ppid 0
+</span><span class='line'>vlan-profile
+</span><span class='line'>  switchport
+</span><span class='line'>  switchport mode trunk
+</span><span class='line'>  switchport trunk allowed vlan all
+</span><span class='line'>  switchport trunk native-vlan 1
+</span><span class='line'>port-profile openstack-profile-2
+</span><span class='line'>ppid 1
+</span><span class='line'>vlan-profile
+</span><span class='line'>  switchport
+</span><span class='line'>  switchport mode trunk
+</span><span class='line'>  switchport trunk allowed vlan add 2
+</span><span class='line'>port-profile openstack-profile-3
+</span><span class='line'>ppid 2
+</span><span class='line'>vlan-profile
+</span><span class='line'>  switchport
+</span><span class='line'>  switchport mode trunk
+</span><span class='line'>  switchport trunk allowed vlan add 3</span></code></pre></td></tr></table></div></figure>
+
+
+<p>As new instances are launched, they should be tied to the port-profile corresponding the network they belong
+to. Any instances on the same network should be able to communicate with each other through the VCS fabric.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>VDX1# show port-profile status
+</span><span class='line'>Port-Profile                        PPID        Activated        Associated MAC Interface
+</span><span class='line'>openstack-profile-2                 1           Yes              fa16.3e1b.95d0 None
+</span><span class='line'>                                                                 fa16.3e64.fce8        Gi 2/0/28
+</span><span class='line'>                                                                 fa16.3e85.5b2f        Gi 2/0/28
+</span><span class='line'>                                                                 fa16.3ea6.3741        Gi 2/0/5
+</span><span class='line'>                                                                 fa16.3ecd.bfc1        Gi 2/0/5
+</span><span class='line'>                                                                 fa16.3eeb.87f7        Gi 2/0/28
+</span><span class='line'>openstack-profile-3                 2           Yes              fa16.3e2c.0baf        None</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>References</h2>
+
+<ul>
+<li>Brocade OpenStack Networking Plugin Wiki <a href="https://wiki.openstack.org/wiki/Brocade-quantum-plugin">https://wiki.openstack.org/wiki/Brocade-quantum-plugin</a></li>
+<li>OpenStack Documentation <a href="http://docs.openstack.org">http://docs.openstack.org</a></li>
+<li>DevStack <a href="http://devstack.org">http://devstack.org</a></li>
+</ul>
+
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[Red Hat RDO on Brocade Ethernet Fabrics]]></title>
+    <link href="http://jrametta.github.io/blog/2014/07/14/red-hat-rdo-on-brocade-ethernet-fabrics/"/>
+    <updated>2014-07-14T22:46:57-07:00</updated>
+    <id>http://jrametta.github.io/blog/2014/07/14/red-hat-rdo-on-brocade-ethernet-fabrics</id>
+    <content type="html"><![CDATA[<p>This short writup describes how to setup Red Hat&rsquo;s OpenStack RDO Havana release with the Brocade VCS plugin for Neutron networking.</p>
+
+<!--more-->
+
+
+<h2>INTRODUCTION</h2>
+
+<p>RDO can easily be deployed using Packstack and the Linux Bridge plugin.  Once complete, a few steps are
+required to reconfigure Neutron to use the Brocade VCS plugin for managing both virtual and physical network
+infrastructure through OpenStack API.</p>
+
+<p>This guide has been tested using CentOS 6.4, but should be applicable to other Red Hat based systems such as
+RHEL or Fedora.</p>
+
+<p>With the Havana release of OpenStack, we are still using the monolithic network plugin. Ice House release will
+introduce the use of the Modular Layer2 (ML2) plugin to simultaneously utilize the variety of layer 2
+networking technologies.</p>
+
+<h2>BROCADE VCS CONFIGURATION</h2>
+
+<p>Brocade VDX switches should be running NOS 4.0 or above with logical chassis mode enabled for configuration
+distribution across all fabric nodes.  See the Brocade NOS administrators guide for additional information.
+Any ports connected to OpenStack compute/network nodes should be configured as port-profile ports.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>VDX_84_186# show running-config interface GigabitEthernet 2/0/28
+</span><span class='line'>interface GigabitEthernet 2/0/28
+</span><span class='line'>  port-profile-port
+</span><span class='line'> no shutdown</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>RDO INSTALLATION USING PACKSTACK</h2>
+
+<p>This guide will walk through the process of deploying OpenStack on a single server with the option of adding
+one or more additional compute nodes.
+Begin by deploying OpenStack as documented in the RDO Neutron Quickstart guide at
+<a href="http://openstack.redhat.com/Neutron-Quickstart.">http://openstack.redhat.com/Neutron-Quickstart.</a>  Install the software repos, reboot the system, and install
+PackStack.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># yum install –y -y http://rdo.fedorapeople.org/openstack-grizzly/rdo-release-grizzly.rpm
+</span><span class='line'># yum -y update
+</span><span class='line'># reboot
+</span><span class='line'># sudo yum install -y openstack-PackStackack python-netaddr</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Generate a PackStack answer file and edit the following variables to enable the linuxbridge plugin.
+Additional compute nodes can be specified here as well.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># packstack --gen-answer-file=linuxbridge.answers
+</span><span class='line'># vi linuxbridge.answers</span></code></pre></td></tr></table></div></figure>
+
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>CONFIG_QUANTUM_L2_PLUGIN=linuxbridge
+</span><span class='line'>CONFIG_QUANTUM_LB_VLAN_RANGES=physnet1:2:1000
+</span><span class='line'>CONFIG_QUANTUM_LB_INTERFACE_MAPPINGS=physnet1:eth1
+</span><span class='line'>CONFIG_NOVA_COMPUTE_HOSTS=10.17.95.6,10.17.88.130
+</span><span class='line'>CONFIG_NOVA_NETWORK_PRIVIF=eth1
+</span><span class='line'>CONFIG_NOVA_COMPUTE_PRIVIF=eth1</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Edit the configuration for  the physical interface connected to the VCS fabric for tenant networks.  It should
+be configured up with no IP address and in promiscuous mode.  All nodes should have a similar configuration.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>DEVICE="eth1"
+</span><span class='line'>BOOTPROTO=static
+</span><span class='line'>ONBOOT="yes"
+</span><span class='line'>TYPE="Ethernet"</span></code></pre></td></tr></table></div></figure>
+
+
+<p>One method to configure the interface for promiscuous mode at boot, is to create /sbin/ifup-local with the
+following content</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>#!/bin/bash
+</span><span class='line'>if [[ "$1" == "eth1" ]]
+</span><span class='line'>then
+</span><span class='line'>  /sbin/ifconfig $1 promisc
+</span><span class='line'>  RC=$?
+</span><span class='line'>fi</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Set executable bit.  This script will run during boot right after network interfaces are brought online.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># chmod +x /sbin/ifup-local
+</span><span class='line'># /etc/init.d/network restart</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Run packstack on the controller node using the previously created answer file</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># packstack --answer-file=linuxbridge.answers</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Once complete, edit /etc/ImageMagick//quantum/l3_agent.ini on the controller and remove br-ex from the
+following line (it should be set to nothing)</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>external_network_bridge =</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Download and install a test image into glance</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># wget -c https://launchpad.net/cirros/trunk/0.3.0/+download/cirros-0.3.0-x86_64-disk.img
+</span><span class='line'># glance image-create --name=cirros-0.3.0-x86_64 --disk-format=qcow2  \
+</span><span class='line'>   --container-format=bare &lt; cirros-0.3.0-x86_64-disk.img</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>INSTALL BROCADE NEUTRON PLUGIN</h2>
+
+<p>To simplify installation, all existing nova instances, networks, and routers should be deleted. Install the
+Brocade plugin from the repository on the controller/network node.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># yum install openstack-quantum-brocade`</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Edit /etc/quantum/plugins/brocade/brocade.ini file on the controller/network node.  The database user and
+password can be copied from the packstack answer file or preexisting linuxbridge.ini.  Ensure the database
+user has proper credentials.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>[SWITCH]
+</span><span class='line'>username = admin
+</span><span class='line'>password = password
+</span><span class='line'>address  = 10.254.8.5
+</span><span class='line'>ostype   = NOS
+</span><span class='line'>
+</span><span class='line'>[DATABASE]
+</span><span class='line'>sql_connection = mysql://root:75ddb50b165b4ed0@localhost/brcd_quantum?charset=utf8
+</span><span class='line'>
+</span><span class='line'>[PHYSICAL_INTERFACE]
+</span><span class='line'>physical_interface = physnet1
+</span><span class='line'>
+</span><span class='line'>[VLANS]
+</span><span class='line'>network_vlan_ranges = physnet1:1000:2999
+</span><span class='line'>
+</span><span class='line'>[AGENT]
+</span><span class='line'>root_helper = sudo /usr/bin/quantum-rootwrap /etc/quantum/rootwrap.conf
+</span><span class='line'>
+</span><span class='line'>[LINUX_BRIDGE]
+</span><span class='line'>physical_interface_mappings = physnet1:eth0</span></code></pre></td></tr></table></div></figure>
+
+
+<p>On the controller, create brcd_quantum database and grant permissions (change IP address and passwords as
+needed).</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># mysql &lt;&lt; EOF
+</span><span class='line'>CREATE DATABASE brcd_quantum;
+</span><span class='line'>GRANT ALL PRIVILEGES ON quantum.* TO 'quantum'@'localhost' \
+</span><span class='line'>IDENTIFIED BY 'password';
+</span><span class='line'>GRANT ALL PRIVILEGES ON quantum.* TO 'quantum'@'10.17.88.130' \
+</span><span class='line'>IDENTIFIED BY 'password';
+</span><span class='line'>FLUSH PRIVILEGES;
+</span><span class='line'>EOF</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Set the core plugin to Brocade in quantum.conf on all nodes.
+core_plugin = quantum.plugins.brocade.QuantumPlugin.BrocadePluginV2</p>
+
+<p>On the controller,QuantumPlugin install the netconf client needed to communicate with the VCS fabric</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># git clone https://code.grnet.gr/git/ncclient
+</span><span class='line'># cd ncclient && python setup.py install</span></code></pre></td></tr></table></div></figure>
+
+
+<p>On the controller, update the symlink in /etc/quantum to point to the brocade.ini file</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># rm plugin.ini && ln -s  /etc/quantum/plugins/brocade/brocade.ini plugin.ini</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Disable or remove the OVS agent if it is installed.  Reboot the system and verify working status.</p>
+
+<h2>TESTING THINGS OUT</h2>
+
+<p>Source the keystone rc file that was installed into root’s home directory to obtain credentials and verify
+status of OpenStack services.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># . ~/ keystonerc_admin
+</span><span class='line'># openstack-status
+</span><span class='line'># quantum agent-list</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Then use the CLI or Horizon to create networks, and launch new virtual machine instances.  Within the VCS
+fabric, check that new port-profiles are created for every tenant network that is created.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>VDX_84_186# show port-profile
+</span><span class='line'>port-profile default
+</span><span class='line'>ppid 0
+</span><span class='line'> vlan-profile
+</span><span class='line'>  switchport
+</span><span class='line'>  switchport mode trunk
+</span><span class='line'>  switchport trunk allowed vlan all
+</span><span class='line'>  switchport trunk native-vlan 1
+</span><span class='line'>port-profile openstack-profile-2
+</span><span class='line'>ppid 1
+</span><span class='line'> vlan-profile
+</span><span class='line'>  switchport
+</span><span class='line'>  switchport mode trunk
+</span><span class='line'>  switchport trunk allowed vlan add 2
+</span><span class='line'>port-profile openstack-profile-3
+</span><span class='line'>ppid 2
+</span><span class='line'> vlan-profile
+</span><span class='line'>  switchport
+</span><span class='line'>  switchport mode trunk
+</span><span class='line'>  switchport trunk allowed vlan add 3</span></code></pre></td></tr></table></div></figure>
+
+
+<p>As new instances are launched, they should be tied to the port-profile corresponding to the network they
+belong to.  Any instances on the same network should be able to communicate with each other.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>VDX_84_186# show port-profile status
+</span><span class='line'>Port-Profile                        PPID        Activated        Associated MAC        Interface
+</span><span class='line'>openstack-profile-2                 1           Yes              fa16.3e1b.95d0        None
+</span><span class='line'>                                                                 fa16.3e64.fce8        Gi 2/0/28
+</span><span class='line'>                                                                 fa16.3e85.5b2f        Gi 2/0/28
+</span><span class='line'>                                                                 fa16.3ea6.3741        Gi 2/0/5
+</span><span class='line'>                                                                 fa16.3ecd.bfc1        Gi 2/0/5
+</span><span class='line'>                                                                 fa16.3eeb.87f7        Gi 2/0/28
+</span><span class='line'>openstack-profile-3                 2           Yes              fa16.3e2c.0baf        None
+</span><span class='line'>
+</span></code></pre></td></tr></table></div></figure>
+
+
+
+]]></content>
+  </entry>
   
 </feed>

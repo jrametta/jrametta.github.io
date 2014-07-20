@@ -1,0 +1,726 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+
+  <title><![CDATA[Category: Brocade | The Fabric]]></title>
+  <link href="http://jrametta.github.io/blog/categories/brocade/atom.xml" rel="self"/>
+  <link href="http://jrametta.github.io/"/>
+  <updated>2014-07-20T02:42:18-07:00</updated>
+  <id>http://jrametta.github.io/</id>
+  <author>
+    <name><![CDATA[Jeff Rametta]]></name>
+    
+  </author>
+  <generator uri="http://octopress.org/">Octopress</generator>
+
+  
+  <entry>
+    <title type="html"><![CDATA[OpenStack Live Migration]]></title>
+    <link href="http://jrametta.github.io/blog/2014/07/16/openstack-live-migration/"/>
+    <updated>2014-07-16T21:52:20-07:00</updated>
+    <id>http://jrametta.github.io/blog/2014/07/16/openstack-live-migration</id>
+    <content type="html"><![CDATA[<p>Live migration in the cloud can be useful at times as it can minimize downtime during maintenence and move
+instances from overloaded compute nodes.  A little while back I setup a devstack cluster with a shared NFS
+filesystem to perform live migration of OpenStack instances from one compute node to another using KVM
+hypervisors.</p>
+
+<!--more-->
+
+
+<p>When using the Brocade VCS plugin for OpenStack Neutron, the tenant network VLAN configuration is
+automatically updated in the physical network when a new instance is created and also when it is moved to
+another compute node.  This enables live migration without needing to make any changes to the network.</p>
+
+<p>In this writeup I describe the process to reconfigure an existing 2-node Icehouse devstack deployment to
+support shared storage-based live migration on OpenStack instances using an NFS server.  If you don&rsquo;t already
+have a working devstack setup,
+take a look at <a href="http://jrametta.github.io/the-fabric/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin">this post</a> using Ubuntu.</p>
+
+<h2>NFS Server Configuration</h2>
+
+<p>I built a simple NFS server using Ubuntu. Install the software package and prepare a directory to
+export.</p>
+
+<p><code>
+$ sudo apt-get install nfs-kernel-server
+$ sudo mkdir -p /srv/demo-stack/instances
+$ sudo chmod o+x /srv/demo-stack/instances
+$ sudo chown stack:stack /srv/demo-stack/instances
+</code>
+Add an entry like the one below into <code>/etc/exports</code> and then export the directory via <code>sudo exportfs -ra</code>
+<code>
+/srv/demo-stack/instances 10.254.0.0/20(rw,fsid=0,insecure,no_subtree_check,async,no_root_squash)
+</code></p>
+
+<h2>OpenStack Node Configuration</h2>
+
+<p>Each of the devstack nodes will be NFS clients.  Setup a directory and mount the remote filesystem.
+Optionally add the mount point to your <code>/etc/fstab</code> so it persists after reboot.</p>
+
+<p><code>
+mkdir -p /opt/stack/data/instances
+sudo apt-get install rpcbind nfs-common
+sudo mount 10.254.15.12:/srv/demo-stack/instances /opt/stack/data/instances
+</code></p>
+
+<p>Several changes to libvirt were made to enable migration.  Edit <code>/etc/libvirt/libvirtd.conf</code> to include the
+following</p>
+
+<p>&nbsp;&nbsp;   &ndash; listen_tls = 0<br/>
+&nbsp;&nbsp;   &ndash; listen_tcp = 1<br/>
+&nbsp;&nbsp;   &ndash; auth_tcp = &ldquo;none&rdquo;</p>
+
+<p>Edit libvirtd options in <code>/etc/default/libvirt-bin</code> to listen over tcp</p>
+
+<p>&nbsp;&nbsp;   &ndash; libvirtd_opts = &ldquo; -d -l&rdquo;</p>
+
+<p>Restart libvirt
+<code>
+sudo service libvirt-bin  restart
+</code></p>
+
+<p>The final configuration is to make sure the VNC server listens on all interfaces and the path to hold the nova
+images is set to the mounted NFS directory.  This can be done by adding the following lines to devstack&rsquo;s
+local.conf</p>
+
+<p>```</p>
+
+<h1>set this for live migration</h1>
+
+<p>VNCSERVER_LISTEN=0.0.0.0
+NOVA_INSTANCES_PATH=/opt/stack/data/instances
+```
+That should be it- run stack.sh and make sure everything is up and running properly.</p>
+
+<h2>Testing things out</h2>
+
+<p>Launch an instance in the cloud using Horizon or the CLI.  You can check which compute node the instance lives
+on using nova commands (currently it resides on icehouse1)</p>
+
+<p><code>
+stack@icehouse1:~/devstack$ nova-manage vm list   | awk '{print $1,$2,$4,$5}' | column -t
+instance   node       state   launched
+instance1  icehouse1  active  2014-07-17
+</code></p>
+
+<p>If you take a look at the VCS fabric, you can find the physical port in the network for the compute node
+node hosting this instance based on it&rsquo;s mac address (in my case port Gi 5/0/7).</p>
+
+<p>```
+openstack-rb5# show port-profile status
+Port-Profile                        PPID        Activated        Associated MAC        Interface
+openstack-profile-901               1           Yes              fa16.3e0e.265d        None</p>
+
+<pre><code>                                                             fa16.3e98.c835        Gi 5/0/7
+                                                             fa16.3ee7.91bb        None
+</code></pre>
+
+<p>openstack-profile-902               2           Yes              fa16.3eee.5fe1        None
+```
+You&rsquo;ll notice it belongs to openstack-profile-901.  If you examine the configuration for this port-profile,
+you can see the VLAN association.  Any instances in this particular tenant network will be carried on VLAN 901
+as the traffic traverses the VCS fabric.</p>
+
+<p><code>
+openstack-rb5# show port-profile name openstack-profile-901
+port-profile openstack-profile-901
+ppid 1
+ vlan-profile
+  switchport
+  switchport mode trunk
+  switchport trunk allowed vlan add 901
+</code></p>
+
+<p>Run the nova live-migration command to move the VM to another compute node.  I ran a continuous ping from the
+instance to another server to see if any packets were dropped during the migration.</p>
+
+<p><code>
+stack@icehouse1:~/devstack$ nova live-migration instance1 icehouse2
+stack@icehouse1:~/devstack$
+stack@icehouse1:~/devstack$ nova list
++--------------------------------------+-----------+-----------+------------+-------------+---------------------+
+| ID                                   | Name      | Status    | Task State | Power State | Networks            |
++--------------------------------------+-----------+-----------+------------+-------------+---------------------+
+| 77df10d1-90da-4f88-91ed-dc360ce7733c | instance1 | MIGRATING | migrating  | Running     | private=192.168.0.2 |
++--------------------------------------+-----------+-----------+------------+-------------+---------------------+
+</code></p>
+
+<p>Looging at the VCS fabric again after a few moments, you should see that the instance has moved to another
+OpenStack compute node (it&rsquo;s now on port Gi 6/0/7)</p>
+
+<p>```
+openstack-rb5# show port-p status
+Port-Profile                        PPID        Activated        Associated MAC        Interface
+openstack-profile-901               1           Yes              fa16.3e0e.265d        None</p>
+
+<pre><code>                                                             fa16.3e98.c835        Gi 6/0/7
+                                                             fa16.3ee7.91bb        None
+</code></pre>
+
+<p>openstack-profile-902               2           Yes              fa16.3eee.5fe1        None</p>
+
+<p>```
+Running nova show confirms the migration has taken place.  If you check the instance, you should see that no
+pings were lost during the move.</p>
+
+<p><code>
+stack@icehouse1:~/devstack$ nova-manage vm list   | awk '{print $1,$2,$4,$5}' | column -t
+instance   node       state   launched
+instance1  icehouse2  active  2014-07-17
+</code></p>
+
+<p>Congratulations, you have successfully performed a live migration of an OpenStack instance with zero downtime
+;)</p>
+
+<h2>References</h2>
+
+<ul>
+<li><a href="http://docs.openstack.org/trunk/config-reference/content/section_configuring-compute-migrations.html">http://docs.openstack.org/trunk/config-reference/content/section_configuring-compute-migrations.html</a></li>
+</ul>
+
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[Devstack Icehouse With Brocade ML2 Plugin]]></title>
+    <link href="http://jrametta.github.io/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin/"/>
+    <updated>2014-07-15T00:21:31-07:00</updated>
+    <id>http://jrametta.github.io/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin</id>
+    <content type="html"><![CDATA[<p><a href="http://devstack.org">Devstack</a> is a scripted installation of OpenStack that can be used for development or
+demo purposes.  This writeup covers a simple two node devstack installation using the Brocade VCS plugin for
+OpenStack networking (aka Neutron).</p>
+
+<!--more-->
+
+
+<p>The VCS ML2 plugin supports both Open vSwitch and Linux Bridge agents and realizes tenant networks as
+port-profiles in the physical network infrastructure.  A port-profile in a Brocade Ethernet fabric is like a
+network policy for VMs or OpenStack instances and can contain information like VLAN assignment, QoS
+information, and ACLs.  Because tenant networks are provisioned end-to-end, no additional networking setup is
+required anywhere in the network.</p>
+
+<h2>Deployment Topology</h2>
+
+<p>My hardware environment is pretty simple.  I have two servers on which to run OpenStack &ndash; one will be a
+controller/compute node, the other will just be a compute node.</p>
+
+<p><img src="/images/os_topo.png"></p>
+
+<h2>Server Configuration</h2>
+
+<p>I used Ubuntu Precise as the OS platform.  The network interfaces were configured as below on the controller.
+Compute node is similar.</p>
+
+<p>```</p>
+
+<h1>The loopback network interface</h1>
+
+<p>auto lo
+iface lo inet loopback</p>
+
+<h1>The primary network interface</h1>
+
+<p>auto eth0
+iface eth0 inet static
+address 10.17.88.129
+netmask 255.255.240.0
+gateway 10.17.80.1
+dns-nameservers 10.17.80.21</p>
+
+<h1>Private tenant network interface (connected to VCS fabric)</h1>
+
+<p>auto eth1
+iface eth1 inet manual
+up ifconfig eth1 up promisc
+```</p>
+
+<p>The VCS plugin currently uses NETCONF for communication with the Ethernet fabric and the ncclient python library
+is required on the controller node.</p>
+
+<p>```</p>
+
+<h1>git clone <a href="https://code.grnet.gr/git/ncclient">https://code.grnet.gr/git/ncclient</a></h1>
+
+<h1>cd ncclient &amp;&amp; python ./setup.py install</h1>
+
+<p>```
+OpenStack runs as a non-root user that has sudo privileges. I usually have a user already setup, but devstack
+will create a new user if you try to run stack.sh as root.</p>
+
+<p>```</p>
+
+<h1>adduser stack</h1>
+
+<h1>echo &ldquo;stack ALL=(ALL) NOPASSWD: ALL&rdquo; >> /etc/sudoers</h1>
+
+<p>```</p>
+
+<p>As stack user, install this devstack repo in the home directory
+```</p>
+
+<h1>git clone <a href="https://github.com/openstack-dev/devstack.git">https://github.com/openstack-dev/devstack.git</a></h1>
+
+<h1>cd devstack</h1>
+
+<p>```</p>
+
+<h2>Configuring Devstack</h2>
+
+<p>Controller node local.conf</p>
+
+<p>```
+[[local|localrc]]</p>
+
+<h1>MISC</h1>
+
+<h1>RECLONE=yes</h1>
+
+<h1>OFFLINE=False</h1>
+
+<h1>Branch/Repos</h1>
+
+<p>NOVA_BRANCH=stable/icehouse
+GLANCE_BRANCH=stable/icehouse
+HORIZON_BRANCH=stable/icehouse
+KEYSTONE_BRANCH=stable/icehouse
+QUANTUM_BRANCH=stable/icehouse
+NEUTRON_BRANCH=stable/icehouse
+CEILOMETER_BRANCH=stable/icehouse
+HEAT_BRANCH=stable/icehouse</p>
+
+<p>disable_service n-net
+enable_service g-api g-reg key n-crt n-obj n-cpu n-cond n-sch horizon</p>
+
+<h1>Neutron services (enable)</h1>
+
+<p>enable_service neutron q-svc q-agt q-dhcp q-meta q-l3
+Q_PLUGIN_CLASS=neutron.plugins.ml2.plugin.Ml2Plugin
+Q_PLUGIN_EXTRA_CONF_FILES=ml2_conf_brocade.ini
+Q_PLUGIN_EXTRA_CONF_PATH=/home/stack/devstack
+Q_ML2_PLUGIN_MECHANISM_DRIVERS=openvswitch,brocade
+Q_ML2_PLUGIN_TYPE_DRIVERS=${Q_ML2_PLUGIN_TYPE_DRIVERS:-local,flat,vlan,gre,vxlan}
+ENABLE_TENANT_VLANS=&ldquo;True&rdquo;
+PHYSICAL_NETWORK=&ldquo;phys1&rdquo;
+TENANT_VLAN_RANGE=901:950
+OVS_PHYSICAL_BRIDGE=br-eth1</p>
+
+<p>ADMIN_PASSWORD=openstack
+DATABASE_PASSWORD=$ADMIN_PASSWORD
+RABBIT_PASSWORD=$ADMIN_PASSWORD
+SERVICE_PASSWORD=$ADMIN_PASSWORD
+SERVICE_TOKEN=$ADMIN_PASSWORD
+MYSQL_PASSWORD=$ADMIN_PASSWORD</p>
+
+<p>DEST=/opt/stack
+LOG=True
+LOGFILE=stack.sh.log
+LOGDAYS=1
+HOST_NAME=$(hostname)
+SERVICE_HOST=10.17.88.129
+HOST_IP=10.17.88.129
+MYSQL_HOST=$SERVICE_HOST
+RABBIT_HOST=$SERVICE_HOST
+GLANCE_HOSTPORT=$SERVICE_HOST:9292
+KEYSTONE_AUTH_HOST=$SERVICE_HOST
+KEYSTONE_SERVICE_HOST=$SERVICE_HOST
+SCHEDULER=nova.scheduler.filter_scheduler.FilterScheduler
+SCREEN_HARDSTATUS=&ldquo;%{= Kw}%-w%{BW}%n %t%{&ndash;}%+w&rdquo;</p>
+
+<p>```</p>
+
+<p>The controller node should also contain an ML2 configuration file ml2_conf_brocade.ini identifying
+the authentication credentials
+and management virtual IP for the VCS fabric.  The location of this file (usually somewhere in
+/etc/neutron/plugins), but should be specified via the <code>Q_PLUGIN_EXTRA_CONF_PATH</code> parameter in local.conf above.
+I happened to just place it in stack&rsquo;s home directory.</p>
+
+<p><code>
+[ml2_brocade]
+username = admin
+password = password
+address  = 172.27.116.32
+ostype   = NOS
+physical_networks = phys1
+</code></p>
+
+<p>Compute node local.conf
+```
+[[local|localrc]]</p>
+
+<h1>MISC</h1>
+
+<h1>RECLONE=yes</h1>
+
+<h1>OFFLINE=True</h1>
+
+<h1>Branch/Repos</h1>
+
+<p>NOVA_BRANCH=stable/icehouse
+GLANCE_BRANCH=stable/icehouse
+HORIZON_BRANCH=stable/icehouse
+KEYSTONE_BRANCH=stable/icehouse
+QUANTUM_BRANCH=stable/icehouse
+NEUTRON_BRANCH=stable/icehouse</p>
+
+<p>disable_service n-net
+ENABLED_SERVICES=n-cpu,rabbit,quantum,q-agt,n-novnc</p>
+
+<p>Q_PLUGIN=ml2
+Q_AGENT=openvswitch
+ENABLE_TENANT_VLANS=&ldquo;True&rdquo;
+PHYSICAL_NETWORK=&ldquo;phys1&rdquo;
+TENANT_VLAN_RANGE=901:950
+OVS_PHYSICAL_BRIDGE=br-eth1</p>
+
+<p>ADMIN_PASSWORD=openstack
+DATABASE_PASSWORD=$ADMIN_PASSWORD
+RABBIT_PASSWORD=$ADMIN_PASSWORD
+SERVICE_PASSWORD=$ADMIN_PASSWORD
+SERVICE_TOKEN=$ADMIN_PASSWORD
+MYSQL_PASSWORD=$ADMIN_PASSWORD</p>
+
+<p>DEST=/opt/stack
+LOG=True
+LOGFILE=stack.sh.log
+LOGDAYS=1
+HOST_NAME=$(hostname)
+SERVICE_HOST=10.17.88.129
+HOST_IP=10.17.88.130
+MYSQL_HOST=$SERVICE_HOST
+RABBIT_HOST=$SERVICE_HOST
+GLANCE_HOSTPORT=$SERVICE_HOST:9292
+KEYSTONE_AUTH_HOST=$SERVICE_HOST
+KEYSTONE_SERVICE_HOST=$SERVICE_HOST
+SCHEDULER=nova.scheduler.filter_scheduler.FilterScheduler</p>
+
+<p>VNCSERVER_LISTEN=$HOST_IP
+VNCSERVER_PROXYCLIENT_ADDRESS=$HOST_IP</p>
+
+<p>SCREEN_HARDSTATUS=&ldquo;%{= Kw}%-w%{BW}%n %t%{&ndash;}%+w&rdquo;
+```</p>
+
+<h2>Testing Things Out</h2>
+
+<p>Source the openrc in the devstack directory to obtain credentials and use the CLI to have a look around,
+create networks, and launch new virtual machine instances. Alternatively, login to the Horizon dashboard at
+<a href="http://controlerNodeIP">http://controlerNodeIP</a> and use the GUI (user: admin or demo, password: openstack).</p>
+
+<p>Within the VCS fabric, check that new port-profiles are created for every tenant network that is created. Two
+new port-profiles should exist after running stack.sh for the first time.  These corrospond to the initial
+pubic and private networks that the devstack script creates.</p>
+
+<p><code>
+DX1# show port-profile
+port-profile default
+ppid 0
+vlan-profile
+  switchport
+  switchport mode trunk
+  switchport trunk allowed vlan all
+  switchport trunk native-vlan 1
+port-profile openstack-profile-2
+ppid 1
+vlan-profile
+  switchport
+  switchport mode trunk
+  switchport trunk allowed vlan add 2
+port-profile openstack-profile-3
+ppid 2
+vlan-profile
+  switchport
+  switchport mode trunk
+  switchport trunk allowed vlan add 3
+</code></p>
+
+<p>As new instances are launched, they should be tied to the port-profile corresponding the network they belong
+to. Any instances on the same network should be able to communicate with each other through the VCS fabric.</p>
+
+<p>```
+VDX1# show port-profile status
+Port-Profile                        PPID        Activated        Associated MAC Interface
+openstack-profile-2                 1           Yes              fa16.3e1b.95d0 None</p>
+
+<pre><code>                                                             fa16.3e64.fce8        Gi 2/0/28
+                                                             fa16.3e85.5b2f        Gi 2/0/28
+                                                             fa16.3ea6.3741        Gi 2/0/5
+                                                             fa16.3ecd.bfc1        Gi 2/0/5
+                                                             fa16.3eeb.87f7        Gi 2/0/28
+</code></pre>
+
+<p>openstack-profile-3                 2           Yes              fa16.3e2c.0baf        None
+```</p>
+
+<h2>References</h2>
+
+<ul>
+<li>Brocade OpenStack Networking Plugin Wiki <a href="https://wiki.openstack.org/wiki/Brocade-quantum-plugin">https://wiki.openstack.org/wiki/Brocade-quantum-plugin</a></li>
+<li>OpenStack Documentation <a href="http://docs.openstack.org">http://docs.openstack.org</a></li>
+<li>DevStack <a href="http://devstack.org">http://devstack.org</a></li>
+</ul>
+
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[Red Hat RDO on Brocade Ethernet Fabrics]]></title>
+    <link href="http://jrametta.github.io/blog/2014/07/14/red-hat-rdo-on-brocade-ethernet-fabrics/"/>
+    <updated>2014-07-14T22:46:57-07:00</updated>
+    <id>http://jrametta.github.io/blog/2014/07/14/red-hat-rdo-on-brocade-ethernet-fabrics</id>
+    <content type="html"><![CDATA[<p>This short writup describes how to setup Red Hat&rsquo;s OpenStack RDO Havana release with the Brocade VCS plugin for Neutron networking.</p>
+
+<!--more-->
+
+
+<h2>INTRODUCTION</h2>
+
+<p>RDO can easily be deployed using Packstack and the Linux Bridge plugin.  Once complete, a few steps are
+required to reconfigure Neutron to use the Brocade VCS plugin for managing both virtual and physical network
+infrastructure through OpenStack API.</p>
+
+<p>This guide has been tested using CentOS 6.4, but should be applicable to other Red Hat based systems such as
+RHEL or Fedora.</p>
+
+<p>With the Havana release of OpenStack, we are still using the monolithic network plugin. Ice House release will
+introduce the use of the Modular Layer2 (ML2) plugin to simultaneously utilize the variety of layer 2
+networking technologies.</p>
+
+<h2>BROCADE VCS CONFIGURATION</h2>
+
+<p>Brocade VDX switches should be running NOS 4.0 or above with logical chassis mode enabled for configuration
+distribution across all fabric nodes.  See the Brocade NOS administrators guide for additional information.
+Any ports connected to OpenStack compute/network nodes should be configured as port-profile ports.</p>
+
+<p><code>
+VDX_84_186# show running-config interface GigabitEthernet 2/0/28
+interface GigabitEthernet 2/0/28
+  port-profile-port
+ no shutdown
+</code></p>
+
+<h2>RDO INSTALLATION USING PACKSTACK</h2>
+
+<p>This guide will walk through the process of deploying OpenStack on a single server with the option of adding
+one or more additional compute nodes.
+Begin by deploying OpenStack as documented in the RDO Neutron Quickstart guide at
+<a href="http://openstack.redhat.com/Neutron-Quickstart.">http://openstack.redhat.com/Neutron-Quickstart.</a>  Install the software repos, reboot the system, and install
+PackStack.</p>
+
+<p>```</p>
+
+<h1>yum install –y -y <a href="http://rdo.fedorapeople.org/openstack-grizzly/rdo-release-grizzly.rpm">http://rdo.fedorapeople.org/openstack-grizzly/rdo-release-grizzly.rpm</a></h1>
+
+<h1>yum -y update</h1>
+
+<h1>reboot</h1>
+
+<h1>sudo yum install -y openstack-PackStackack python-netaddr</h1>
+
+<p>```</p>
+
+<p>Generate a PackStack answer file and edit the following variables to enable the linuxbridge plugin.
+Additional compute nodes can be specified here as well.</p>
+
+<p>```</p>
+
+<h1>packstack &mdash;gen-answer-file=linuxbridge.answers</h1>
+
+<h1>vi linuxbridge.answers</h1>
+
+<p><code>
+</code>
+CONFIG_QUANTUM_L2_PLUGIN=linuxbridge
+CONFIG_QUANTUM_LB_VLAN_RANGES=physnet1:2:1000
+CONFIG_QUANTUM_LB_INTERFACE_MAPPINGS=physnet1:eth1
+CONFIG_NOVA_COMPUTE_HOSTS=10.17.95.6,10.17.88.130
+CONFIG_NOVA_NETWORK_PRIVIF=eth1
+CONFIG_NOVA_COMPUTE_PRIVIF=eth1
+```</p>
+
+<p>Edit the configuration for  the physical interface connected to the VCS fabric for tenant networks.  It should
+be configured up with no IP address and in promiscuous mode.  All nodes should have a similar configuration.</p>
+
+<p><code>
+DEVICE="eth1"
+BOOTPROTO=static
+ONBOOT="yes"
+TYPE="Ethernet"
+</code></p>
+
+<p>One method to configure the interface for promiscuous mode at boot, is to create /sbin/ifup-local with the
+following content</p>
+
+<p>```</p>
+
+<h1>!/bin/bash</h1>
+
+<p>if [[ &ldquo;$1&rdquo; == &ldquo;eth1&rdquo; ]]
+then
+  /sbin/ifconfig $1 promisc
+  RC=$?
+fi
+```</p>
+
+<p>Set executable bit.  This script will run during boot right after network interfaces are brought online.</p>
+
+<p>```</p>
+
+<h1>chmod +x /sbin/ifup-local</h1>
+
+<h1>/etc/init.d/network restart</h1>
+
+<p>```</p>
+
+<p>Run packstack on the controller node using the previously created answer file</p>
+
+<p>```</p>
+
+<h1>packstack &mdash;answer-file=linuxbridge.answers</h1>
+
+<p>```</p>
+
+<p>Once complete, edit /etc/ImageMagick//quantum/l3_agent.ini on the controller and remove br-ex from the
+following line (it should be set to nothing)
+<code>
+external_network_bridge =
+</code></p>
+
+<p>Download and install a test image into glance
+```</p>
+
+<h1>wget -c <a href="https://launchpad.net/cirros/trunk/0.3.0/+download/cirros-0.3.0-x86_64-disk.img">https://launchpad.net/cirros/trunk/0.3.0/+download/cirros-0.3.0-x86_64-disk.img</a></h1>
+
+<h1>glance image-create &mdash;name=cirros-0.3.0-x86_64 &mdash;disk-format=qcow2  \</h1>
+
+<p>   &mdash;container-format=bare &lt; cirros-0.3.0-x86_64-disk.img
+```</p>
+
+<h2>INSTALL BROCADE NEUTRON PLUGIN</h2>
+
+<p>To simplify installation, all existing nova instances, networks, and routers should be deleted. Install the
+Brocade plugin from the repository on the controller/network node.
+```</p>
+
+<h1>yum install openstack-quantum-brocade`</h1>
+
+<p>```</p>
+
+<p>Edit /etc/quantum/plugins/brocade/brocade.ini file on the controller/network node.  The database user and
+password can be copied from the packstack answer file or preexisting linuxbridge.ini.  Ensure the database
+user has proper credentials.
+```
+[SWITCH]
+username = admin
+password = password
+address  = 10.254.8.5
+ostype   = NOS</p>
+
+<p>[DATABASE]
+sql_connection = mysql://root:75ddb50b165b4ed0@localhost/brcd_quantum?charset=utf8</p>
+
+<p>[PHYSICAL_INTERFACE]
+physical_interface = physnet1</p>
+
+<p>[VLANS]
+network_vlan_ranges = physnet1:1000:2999</p>
+
+<p>[AGENT]
+root_helper = sudo /usr/bin/quantum-rootwrap /etc/quantum/rootwrap.conf</p>
+
+<p>[LINUX_BRIDGE]
+physical_interface_mappings = physnet1:eth0
+```</p>
+
+<p>On the controller, create brcd_quantum database and grant permissions (change IP address and passwords as
+needed).
+```</p>
+
+<h1>mysql &lt;&lt; EOF</h1>
+
+<p>CREATE DATABASE brcd_quantum;
+GRANT ALL PRIVILEGES ON quantum.<em> TO &lsquo;quantum&rsquo;@&lsquo;localhost&rsquo; \
+IDENTIFIED BY &lsquo;password&rsquo;;
+GRANT ALL PRIVILEGES ON quantum.</em> TO &lsquo;quantum&rsquo;@&lsquo;10.17.88.130&rsquo; \
+IDENTIFIED BY &lsquo;password&rsquo;;
+FLUSH PRIVILEGES;
+EOF
+```</p>
+
+<p>Set the core plugin to Brocade in quantum.conf on all nodes.
+core_plugin = quantum.plugins.brocade.QuantumPlugin.BrocadePluginV2</p>
+
+<p>On the controller,QuantumPlugin install the netconf client needed to communicate with the VCS fabric
+```</p>
+
+<h1>git clone <a href="https://code.grnet.gr/git/ncclient">https://code.grnet.gr/git/ncclient</a></h1>
+
+<h1>cd ncclient &amp;&amp; python setup.py install</h1>
+
+<p>```</p>
+
+<p>On the controller, update the symlink in /etc/quantum to point to the brocade.ini file
+```</p>
+
+<h1>rm plugin.ini &amp;&amp; ln -s  /etc/quantum/plugins/brocade/brocade.ini plugin.ini</h1>
+
+<p>```</p>
+
+<p>Disable or remove the OVS agent if it is installed.  Reboot the system and verify working status.</p>
+
+<h2>TESTING THINGS OUT</h2>
+
+<p>Source the keystone rc file that was installed into root’s home directory to obtain credentials and verify
+status of OpenStack services.<br/>
+```</p>
+
+<h1>. ~/ keystonerc_admin</h1>
+
+<h1>openstack-status</h1>
+
+<h1>quantum agent-list</h1>
+
+<p><code>
+Then use the CLI or Horizon to create networks, and launch new virtual machine instances.  Within the VCS
+fabric, check that new port-profiles are created for every tenant network that is created.  
+</code>
+VDX_84_186# show port-profile
+port-profile default
+ppid 0
+ vlan-profile
+  switchport
+  switchport mode trunk
+  switchport trunk allowed vlan all
+  switchport trunk native-vlan 1
+port-profile openstack-profile-2
+ppid 1
+ vlan-profile
+  switchport
+  switchport mode trunk
+  switchport trunk allowed vlan add 2
+port-profile openstack-profile-3
+ppid 2
+ vlan-profile
+  switchport
+  switchport mode trunk
+  switchport trunk allowed vlan add 3
+```</p>
+
+<p>As new instances are launched, they should be tied to the port-profile corresponding to the network they
+belong to.  Any instances on the same network should be able to communicate with each other.
+```
+VDX_84_186# show port-profile status
+Port-Profile                        PPID        Activated        Associated MAC        Interface
+openstack-profile-2                 1           Yes              fa16.3e1b.95d0        None</p>
+
+<pre><code>                                                             fa16.3e64.fce8        Gi 2/0/28
+                                                             fa16.3e85.5b2f        Gi 2/0/28
+                                                             fa16.3ea6.3741        Gi 2/0/5
+                                                             fa16.3ecd.bfc1        Gi 2/0/5
+                                                             fa16.3eeb.87f7        Gi 2/0/28
+</code></pre>
+
+<p>openstack-profile-3                 2           Yes              fa16.3e2c.0baf        None</p>
+
+<p>```</p>
+]]></content>
+  </entry>
+  
+</feed>

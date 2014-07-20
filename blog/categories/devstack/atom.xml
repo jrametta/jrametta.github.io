@@ -1,0 +1,296 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+
+  <title><![CDATA[Category: Devstack | The Fabric]]></title>
+  <link href="http://jrametta.github.io/blog/categories/devstack/atom.xml" rel="self"/>
+  <link href="http://jrametta.github.io/"/>
+  <updated>2014-07-20T02:42:18-07:00</updated>
+  <id>http://jrametta.github.io/</id>
+  <author>
+    <name><![CDATA[Jeff Rametta]]></name>
+    
+  </author>
+  <generator uri="http://octopress.org/">Octopress</generator>
+
+  
+  <entry>
+    <title type="html"><![CDATA[Devstack Icehouse With Brocade ML2 Plugin]]></title>
+    <link href="http://jrametta.github.io/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin/"/>
+    <updated>2014-07-15T00:21:31-07:00</updated>
+    <id>http://jrametta.github.io/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin</id>
+    <content type="html"><![CDATA[<p><a href="http://devstack.org">Devstack</a> is a scripted installation of OpenStack that can be used for development or
+demo purposes.  This writeup covers a simple two node devstack installation using the Brocade VCS plugin for
+OpenStack networking (aka Neutron).</p>
+
+<!--more-->
+
+
+<p>The VCS ML2 plugin supports both Open vSwitch and Linux Bridge agents and realizes tenant networks as
+port-profiles in the physical network infrastructure.  A port-profile in a Brocade Ethernet fabric is like a
+network policy for VMs or OpenStack instances and can contain information like VLAN assignment, QoS
+information, and ACLs.  Because tenant networks are provisioned end-to-end, no additional networking setup is
+required anywhere in the network.</p>
+
+<h2>Deployment Topology</h2>
+
+<p>My hardware environment is pretty simple.  I have two servers on which to run OpenStack &ndash; one will be a
+controller/compute node, the other will just be a compute node.</p>
+
+<p><img src="/images/os_topo.png"></p>
+
+<h2>Server Configuration</h2>
+
+<p>I used Ubuntu Precise as the OS platform.  The network interfaces were configured as below on the controller.
+Compute node is similar.</p>
+
+<p>```</p>
+
+<h1>The loopback network interface</h1>
+
+<p>auto lo
+iface lo inet loopback</p>
+
+<h1>The primary network interface</h1>
+
+<p>auto eth0
+iface eth0 inet static
+address 10.17.88.129
+netmask 255.255.240.0
+gateway 10.17.80.1
+dns-nameservers 10.17.80.21</p>
+
+<h1>Private tenant network interface (connected to VCS fabric)</h1>
+
+<p>auto eth1
+iface eth1 inet manual
+up ifconfig eth1 up promisc
+```</p>
+
+<p>The VCS plugin currently uses NETCONF for communication with the Ethernet fabric and the ncclient python library
+is required on the controller node.</p>
+
+<p>```</p>
+
+<h1>git clone <a href="https://code.grnet.gr/git/ncclient">https://code.grnet.gr/git/ncclient</a></h1>
+
+<h1>cd ncclient &amp;&amp; python ./setup.py install</h1>
+
+<p>```
+OpenStack runs as a non-root user that has sudo privileges. I usually have a user already setup, but devstack
+will create a new user if you try to run stack.sh as root.</p>
+
+<p>```</p>
+
+<h1>adduser stack</h1>
+
+<h1>echo &ldquo;stack ALL=(ALL) NOPASSWD: ALL&rdquo; >> /etc/sudoers</h1>
+
+<p>```</p>
+
+<p>As stack user, install this devstack repo in the home directory
+```</p>
+
+<h1>git clone <a href="https://github.com/openstack-dev/devstack.git">https://github.com/openstack-dev/devstack.git</a></h1>
+
+<h1>cd devstack</h1>
+
+<p>```</p>
+
+<h2>Configuring Devstack</h2>
+
+<p>Controller node local.conf</p>
+
+<p>```
+[[local|localrc]]</p>
+
+<h1>MISC</h1>
+
+<h1>RECLONE=yes</h1>
+
+<h1>OFFLINE=False</h1>
+
+<h1>Branch/Repos</h1>
+
+<p>NOVA_BRANCH=stable/icehouse
+GLANCE_BRANCH=stable/icehouse
+HORIZON_BRANCH=stable/icehouse
+KEYSTONE_BRANCH=stable/icehouse
+QUANTUM_BRANCH=stable/icehouse
+NEUTRON_BRANCH=stable/icehouse
+CEILOMETER_BRANCH=stable/icehouse
+HEAT_BRANCH=stable/icehouse</p>
+
+<p>disable_service n-net
+enable_service g-api g-reg key n-crt n-obj n-cpu n-cond n-sch horizon</p>
+
+<h1>Neutron services (enable)</h1>
+
+<p>enable_service neutron q-svc q-agt q-dhcp q-meta q-l3
+Q_PLUGIN_CLASS=neutron.plugins.ml2.plugin.Ml2Plugin
+Q_PLUGIN_EXTRA_CONF_FILES=ml2_conf_brocade.ini
+Q_PLUGIN_EXTRA_CONF_PATH=/home/stack/devstack
+Q_ML2_PLUGIN_MECHANISM_DRIVERS=openvswitch,brocade
+Q_ML2_PLUGIN_TYPE_DRIVERS=${Q_ML2_PLUGIN_TYPE_DRIVERS:-local,flat,vlan,gre,vxlan}
+ENABLE_TENANT_VLANS=&ldquo;True&rdquo;
+PHYSICAL_NETWORK=&ldquo;phys1&rdquo;
+TENANT_VLAN_RANGE=901:950
+OVS_PHYSICAL_BRIDGE=br-eth1</p>
+
+<p>ADMIN_PASSWORD=openstack
+DATABASE_PASSWORD=$ADMIN_PASSWORD
+RABBIT_PASSWORD=$ADMIN_PASSWORD
+SERVICE_PASSWORD=$ADMIN_PASSWORD
+SERVICE_TOKEN=$ADMIN_PASSWORD
+MYSQL_PASSWORD=$ADMIN_PASSWORD</p>
+
+<p>DEST=/opt/stack
+LOG=True
+LOGFILE=stack.sh.log
+LOGDAYS=1
+HOST_NAME=$(hostname)
+SERVICE_HOST=10.17.88.129
+HOST_IP=10.17.88.129
+MYSQL_HOST=$SERVICE_HOST
+RABBIT_HOST=$SERVICE_HOST
+GLANCE_HOSTPORT=$SERVICE_HOST:9292
+KEYSTONE_AUTH_HOST=$SERVICE_HOST
+KEYSTONE_SERVICE_HOST=$SERVICE_HOST
+SCHEDULER=nova.scheduler.filter_scheduler.FilterScheduler
+SCREEN_HARDSTATUS=&ldquo;%{= Kw}%-w%{BW}%n %t%{&ndash;}%+w&rdquo;</p>
+
+<p>```</p>
+
+<p>The controller node should also contain an ML2 configuration file ml2_conf_brocade.ini identifying
+the authentication credentials
+and management virtual IP for the VCS fabric.  The location of this file (usually somewhere in
+/etc/neutron/plugins), but should be specified via the <code>Q_PLUGIN_EXTRA_CONF_PATH</code> parameter in local.conf above.
+I happened to just place it in stack&rsquo;s home directory.</p>
+
+<p><code>
+[ml2_brocade]
+username = admin
+password = password
+address  = 172.27.116.32
+ostype   = NOS
+physical_networks = phys1
+</code></p>
+
+<p>Compute node local.conf
+```
+[[local|localrc]]</p>
+
+<h1>MISC</h1>
+
+<h1>RECLONE=yes</h1>
+
+<h1>OFFLINE=True</h1>
+
+<h1>Branch/Repos</h1>
+
+<p>NOVA_BRANCH=stable/icehouse
+GLANCE_BRANCH=stable/icehouse
+HORIZON_BRANCH=stable/icehouse
+KEYSTONE_BRANCH=stable/icehouse
+QUANTUM_BRANCH=stable/icehouse
+NEUTRON_BRANCH=stable/icehouse</p>
+
+<p>disable_service n-net
+ENABLED_SERVICES=n-cpu,rabbit,quantum,q-agt,n-novnc</p>
+
+<p>Q_PLUGIN=ml2
+Q_AGENT=openvswitch
+ENABLE_TENANT_VLANS=&ldquo;True&rdquo;
+PHYSICAL_NETWORK=&ldquo;phys1&rdquo;
+TENANT_VLAN_RANGE=901:950
+OVS_PHYSICAL_BRIDGE=br-eth1</p>
+
+<p>ADMIN_PASSWORD=openstack
+DATABASE_PASSWORD=$ADMIN_PASSWORD
+RABBIT_PASSWORD=$ADMIN_PASSWORD
+SERVICE_PASSWORD=$ADMIN_PASSWORD
+SERVICE_TOKEN=$ADMIN_PASSWORD
+MYSQL_PASSWORD=$ADMIN_PASSWORD</p>
+
+<p>DEST=/opt/stack
+LOG=True
+LOGFILE=stack.sh.log
+LOGDAYS=1
+HOST_NAME=$(hostname)
+SERVICE_HOST=10.17.88.129
+HOST_IP=10.17.88.130
+MYSQL_HOST=$SERVICE_HOST
+RABBIT_HOST=$SERVICE_HOST
+GLANCE_HOSTPORT=$SERVICE_HOST:9292
+KEYSTONE_AUTH_HOST=$SERVICE_HOST
+KEYSTONE_SERVICE_HOST=$SERVICE_HOST
+SCHEDULER=nova.scheduler.filter_scheduler.FilterScheduler</p>
+
+<p>VNCSERVER_LISTEN=$HOST_IP
+VNCSERVER_PROXYCLIENT_ADDRESS=$HOST_IP</p>
+
+<p>SCREEN_HARDSTATUS=&ldquo;%{= Kw}%-w%{BW}%n %t%{&ndash;}%+w&rdquo;
+```</p>
+
+<h2>Testing Things Out</h2>
+
+<p>Source the openrc in the devstack directory to obtain credentials and use the CLI to have a look around,
+create networks, and launch new virtual machine instances. Alternatively, login to the Horizon dashboard at
+<a href="http://controlerNodeIP">http://controlerNodeIP</a> and use the GUI (user: admin or demo, password: openstack).</p>
+
+<p>Within the VCS fabric, check that new port-profiles are created for every tenant network that is created. Two
+new port-profiles should exist after running stack.sh for the first time.  These corrospond to the initial
+pubic and private networks that the devstack script creates.</p>
+
+<p><code>
+DX1# show port-profile
+port-profile default
+ppid 0
+vlan-profile
+  switchport
+  switchport mode trunk
+  switchport trunk allowed vlan all
+  switchport trunk native-vlan 1
+port-profile openstack-profile-2
+ppid 1
+vlan-profile
+  switchport
+  switchport mode trunk
+  switchport trunk allowed vlan add 2
+port-profile openstack-profile-3
+ppid 2
+vlan-profile
+  switchport
+  switchport mode trunk
+  switchport trunk allowed vlan add 3
+</code></p>
+
+<p>As new instances are launched, they should be tied to the port-profile corresponding the network they belong
+to. Any instances on the same network should be able to communicate with each other through the VCS fabric.</p>
+
+<p>```
+VDX1# show port-profile status
+Port-Profile                        PPID        Activated        Associated MAC Interface
+openstack-profile-2                 1           Yes              fa16.3e1b.95d0 None</p>
+
+<pre><code>                                                             fa16.3e64.fce8        Gi 2/0/28
+                                                             fa16.3e85.5b2f        Gi 2/0/28
+                                                             fa16.3ea6.3741        Gi 2/0/5
+                                                             fa16.3ecd.bfc1        Gi 2/0/5
+                                                             fa16.3eeb.87f7        Gi 2/0/28
+</code></pre>
+
+<p>openstack-profile-3                 2           Yes              fa16.3e2c.0baf        None
+```</p>
+
+<h2>References</h2>
+
+<ul>
+<li>Brocade OpenStack Networking Plugin Wiki <a href="https://wiki.openstack.org/wiki/Brocade-quantum-plugin">https://wiki.openstack.org/wiki/Brocade-quantum-plugin</a></li>
+<li>OpenStack Documentation <a href="http://docs.openstack.org">http://docs.openstack.org</a></li>
+<li>DevStack <a href="http://devstack.org">http://devstack.org</a></li>
+</ul>
+
+]]></content>
+  </entry>
+  
+</feed>
