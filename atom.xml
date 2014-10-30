@@ -4,7 +4,7 @@
   <title><![CDATA[The Fabric]]></title>
   <link href="http://jrametta.github.io/atom.xml" rel="self"/>
   <link href="http://jrametta.github.io/"/>
-  <updated>2014-07-21T01:55:14-07:00</updated>
+  <updated>2014-10-30T01:44:35-07:00</updated>
   <id>http://jrametta.github.io/</id>
   <author>
     <name><![CDATA[Jeff Rametta]]></name>
@@ -12,6 +12,159 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[VXLAN Gateway Configuration Using the VCS RESTful API]]></title>
+    <link href="http://jrametta.github.io/blog/2014/10/26/overlay-gateway/"/>
+    <updated>2014-10-26T02:25:41-07:00</updated>
+    <id>http://jrametta.github.io/blog/2014/10/26/overlay-gateway</id>
+    <content type="html"><![CDATA[<p>With NOS 5.0, Brocade VCS fabrics now provide support for network programmability using a RESTful API. In this
+post, I demonstrate how the API can be used to manage VXLAN overlay-gateway functionality in the VDX.</p>
+
+<!--more-->
+
+
+<p>The Overlay Gateway feature in the VDX can enable layer 2 extension across multiple routed VCS fabrics using
+VXLAN encapsulation.  In the diagram, there are two VCS fabrics connected by a layer 3 core.  Should the need
+to provide layer 2 connectivity between servers in one fabric to another, we can create a VXLAN tunnel across
+the network- from any VLAN in one fabric to any VLAN in the other.</p>
+
+<p><img src="http://jrametta.github.io/images/vcs-overlay.png"></p>
+
+<p>We can do this from the CLI using the below commands, but since I&rsquo;m trying to improve my programming skills,
+we will replicate this configuration process in Python using the Requests module.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>site100# show run overlay-gateway
+</span><span class='line'>overlay-gateway sko_gateway
+</span><span class='line'> type layer2-extension
+</span><span class='line'> ip interface Loopback 100
+</span><span class='line'> attach rbridge-id add 100
+</span><span class='line'> map vlan 100 vni 1600000
+</span><span class='line'> site site200
+</span><span class='line'>  ip address 200.200.200.200
+</span><span class='line'>  extend vlan add 100
+</span><span class='line'> !
+</span><span class='line'> activate
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>As you can see, there are quite a few steps involved in creating a VXLAN overlay gateway. You need to</p>
+
+<ul>
+<li> Define an overlay-gateway name</li>
+<li> Set the gateway type to l2 extension</li>
+<li> Specify a loopback id to use for the VTEP</li>
+<li> Attach an RBridge ID</li>
+<li> Map a VLAN to a VNI</li>
+<li> Activate the overlay gateway</li>
+<li> Define a name for the remote site</li>
+<li> Specify remote site&rsquo;s IP address of VTEP</li>
+<li> Specify which vlans to extend</li>
+</ul>
+
+
+<p>The full source code can be found <a href="https://github.com/jrametta/brocade-vf-extension">here</a>, but the following
+snippets might provide the gist of what needs to be accomplished.</p>
+
+<p>For all of the REST calls made here, I use a base configuration URI of
+<code>http://&lt;switch_ip_address&gt;/rest/config/running</code> to access the running configuration resources.  The VDX
+supports create, read, update, delete (CRUD) operations using the standard HTTP methods GET, POST, PUT, PATCH,
+and DELETE.  All requests payloads are represented as XML elements.</p>
+
+<p>There are helper functions in vfx_payload.py that are used to build the xml payload data for all of the REST
+calls needed to configure and activate the overlay-gateway.  ElementTree is used to build and parse the XML
+as needed.  The example here returns the XML payload for creating the overlay-gateway (the first step required
+to create a tunnel).</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='py'><span class='line'><span class="kn">from</span> <span class="nn">xml.etree</span> <span class="kn">import</span> <span class="n">ElementTree</span>
+</span><span class='line'><span class="kn">from</span> <span class="nn">xml.etree.ElementTree</span> <span class="kn">import</span> <span class="n">Element</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">def</span> <span class="nf">overlay_gateway</span><span class="p">(</span><span class="n">gateway_name</span><span class="p">):</span>
+</span><span class='line'>    <span class="sd">&quot;&quot;&quot;build xml payload for create overlay request&quot;&quot;&quot;</span>
+</span><span class='line'>    <span class="n">gw_element</span> <span class="o">=</span> <span class="n">Element</span><span class="p">(</span><span class="s">&#39;overlay-gateway&#39;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">name_element</span> <span class="o">=</span> <span class="n">ElementTree</span><span class="o">.</span><span class="n">SubElement</span><span class="p">(</span><span class="n">gw_element</span><span class="p">,</span> <span class="s">&#39;name&#39;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">name_element</span><span class="o">.</span><span class="n">text</span> <span class="o">=</span> <span class="n">gateway_name</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">ElementTree</span><span class="o">.</span><span class="n">tostring</span><span class="p">(</span><span class="n">gw_element</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>In vfx.py, I use the Python Requests module to create the overlay-gateway via a POST request to the
+management virtual IP of the VCS fabric.  Basic Authentication is used and I pass username/password
+credentials along with the request.  A media type of <code>application/vnd.configuration.resource+xml</code> must be
+specified in the Accept header field of the request.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='py'><span class='line'><span class="kn">import</span> <span class="nn">requests</span>
+</span><span class='line'><span class="kn">import</span> <span class="nn">vfx_payload</span> <span class="kn">as</span> <span class="nn">PF</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">def</span> <span class="nf">tunnel_create</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class='line'>    <span class="sd">&quot;&quot;&quot;create vxlan overlay gateway&quot;&quot;&quot;</span>
+</span><span class='line'>    <span class="n">payload</span> <span class="o">=</span> <span class="n">PF</span><span class="o">.</span><span class="n">overlay_gateway</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gateway_name</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">config_url</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">payload</span><span class="p">,</span>
+</span><span class='line'>                        <span class="n">headers</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">headers</span><span class="p">,</span>
+</span><span class='line'>                        <span class="n">auth</span><span class="o">=</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">username</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">password</span><span class="p">))</span>
+</span><span class='line'>    <span class="bp">self</span><span class="o">.</span><span class="n">check_response</span><span class="p">(</span><span class="n">req</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">req</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>You can basically repeat this process for each of the overlay gateway configuration tasks and make the
+corresponding POST/PUT/DELETE request that is needed.  The final command to create a tunnel with my script is</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>$ ./vfx.py  create  --hostname 10.254.11.17  --gw sko_gateway --loopback 100 --rbridge 100 \
+</span><span class='line'>   --vlan 100 --vni 1600000 --remote_site site2 --remote_ip 200.200.200.200
+</span><span class='line'>
+</span><span class='line'>$ ./vfx.py  show  --hostname 10.254.11.17 --gw sko_gateway
+</span><span class='line'>GW Name:   sko_gateway
+</span><span class='line'>Active:    true
+</span><span class='line'>Type:      layer2-extension
+</span><span class='line'>RBridge_ID 100
+</span><span class='line'>VLAN:      100
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Run the command against the remote switch and you should have a VXLAN tunnel between two fabrics.</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[OpenStack Live Migration]]></title>

@@ -1,0 +1,410 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>VXLAN Gateway Configuration Using the VCS RESTful API - The Fabric</title>
+  <meta name="author" content="Jeff Rametta">
+
+  
+  <meta name="description" content="With NOS 5.0, Brocade VCS fabrics now provide support for network programmability using a RESTful API. In this
+post, I demonstrate how the API can be &hellip;">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="http://jrametta.github.io/blog/2014/10/26/overlay-gateway">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="The Fabric" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="//ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.min.js"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">The Fabric</a></h1>
+  
+    <h2>Jeff Rametta | Yet Another Cloud and Networking Blog</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:jrametta.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">VXLAN Gateway Configuration Using the VCS RESTful API</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+
+
+
+  
+
+
+<time datetime="2014-10-26T02:25:41-07:00" pubdate data-updated="true">Oct 26<sup>th</sup>, 2014</time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><p>With NOS 5.0, Brocade VCS fabrics now provide support for network programmability using a RESTful API. In this
+post, I demonstrate how the API can be used to manage VXLAN overlay-gateway functionality in the VDX.</p>
+
+<!--more-->
+
+
+<p>The Overlay Gateway feature in the VDX can enable layer 2 extension across multiple routed VCS fabrics using
+VXLAN encapsulation.  In the diagram, there are two VCS fabrics connected by a layer 3 core.  Should the need
+to provide layer 2 connectivity between servers in one fabric to another, we can create a VXLAN tunnel across
+the network- from any VLAN in one fabric to any VLAN in the other.</p>
+
+<p><img src="/images/vcs-overlay.png"></p>
+
+<p>We can do this from the CLI using the below commands, but since I&rsquo;m trying to improve my programming skills,
+we will replicate this configuration process in Python using the Requests module.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>site100# show run overlay-gateway
+</span><span class='line'>overlay-gateway sko_gateway
+</span><span class='line'> type layer2-extension
+</span><span class='line'> ip interface Loopback 100
+</span><span class='line'> attach rbridge-id add 100
+</span><span class='line'> map vlan 100 vni 1600000
+</span><span class='line'> site site200
+</span><span class='line'>  ip address 200.200.200.200
+</span><span class='line'>  extend vlan add 100
+</span><span class='line'> !
+</span><span class='line'> activate
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>As you can see, there are quite a few steps involved in creating a VXLAN overlay gateway. You need to</p>
+
+<ul>
+<li> Define an overlay-gateway name</li>
+<li> Set the gateway type to l2 extension</li>
+<li> Specify a loopback id to use for the VTEP</li>
+<li> Attach an RBridge ID</li>
+<li> Map a VLAN to a VNI</li>
+<li> Activate the overlay gateway</li>
+<li> Define a name for the remote site</li>
+<li> Specify remote site&rsquo;s IP address of VTEP</li>
+<li> Specify which vlans to extend</li>
+</ul>
+
+
+<p>The full source code can be found <a href="https://github.com/jrametta/brocade-vf-extension">here</a>, but the following
+snippets might provide the gist of what needs to be accomplished.</p>
+
+<p>For all of the REST calls made here, I use a base configuration URI of
+<code>http://&lt;switch_ip_address&gt;/rest/config/running</code> to access the running configuration resources.  The VDX
+supports create, read, update, delete (CRUD) operations using the standard HTTP methods GET, POST, PUT, PATCH,
+and DELETE.  All requests payloads are represented as XML elements.</p>
+
+<p>There are helper functions in vfx_payload.py that are used to build the xml payload data for all of the REST
+calls needed to configure and activate the overlay-gateway.  ElementTree is used to build and parse the XML
+as needed.  The example here returns the XML payload for creating the overlay-gateway (the first step required
+to create a tunnel).</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='py'><span class='line'><span class="kn">from</span> <span class="nn">xml.etree</span> <span class="kn">import</span> <span class="n">ElementTree</span>
+</span><span class='line'><span class="kn">from</span> <span class="nn">xml.etree.ElementTree</span> <span class="kn">import</span> <span class="n">Element</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">def</span> <span class="nf">overlay_gateway</span><span class="p">(</span><span class="n">gateway_name</span><span class="p">):</span>
+</span><span class='line'>    <span class="sd">&quot;&quot;&quot;build xml payload for create overlay request&quot;&quot;&quot;</span>
+</span><span class='line'>    <span class="n">gw_element</span> <span class="o">=</span> <span class="n">Element</span><span class="p">(</span><span class="s">&#39;overlay-gateway&#39;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">name_element</span> <span class="o">=</span> <span class="n">ElementTree</span><span class="o">.</span><span class="n">SubElement</span><span class="p">(</span><span class="n">gw_element</span><span class="p">,</span> <span class="s">&#39;name&#39;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">name_element</span><span class="o">.</span><span class="n">text</span> <span class="o">=</span> <span class="n">gateway_name</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">ElementTree</span><span class="o">.</span><span class="n">tostring</span><span class="p">(</span><span class="n">gw_element</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>In vfx.py, I use the Python Requests module to create the overlay-gateway via a POST request to the
+management virtual IP of the VCS fabric.  Basic Authentication is used and I pass username/password
+credentials along with the request.  A media type of <code>application/vnd.configuration.resource+xml</code> must be
+specified in the Accept header field of the request.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='py'><span class='line'><span class="kn">import</span> <span class="nn">requests</span>
+</span><span class='line'><span class="kn">import</span> <span class="nn">vfx_payload</span> <span class="kn">as</span> <span class="nn">PF</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">def</span> <span class="nf">tunnel_create</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class='line'>    <span class="sd">&quot;&quot;&quot;create vxlan overlay gateway&quot;&quot;&quot;</span>
+</span><span class='line'>    <span class="n">payload</span> <span class="o">=</span> <span class="n">PF</span><span class="o">.</span><span class="n">overlay_gateway</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gateway_name</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">config_url</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">payload</span><span class="p">,</span>
+</span><span class='line'>                        <span class="n">headers</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">headers</span><span class="p">,</span>
+</span><span class='line'>                        <span class="n">auth</span><span class="o">=</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">username</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">password</span><span class="p">))</span>
+</span><span class='line'>    <span class="bp">self</span><span class="o">.</span><span class="n">check_response</span><span class="p">(</span><span class="n">req</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">req</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>You can basically repeat this process for each of the overlay gateway configuration tasks and make the
+corresponding POST/PUT/DELETE request that is needed.  The final command to create a tunnel with my script is</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>$ ./vfx.py  create  --hostname 10.254.11.17  --gw sko_gateway --loopback 100 --rbridge 100 \
+</span><span class='line'>   --vlan 100 --vni 1600000 --remote_site site2 --remote_ip 200.200.200.200
+</span><span class='line'>
+</span><span class='line'>$ ./vfx.py  show  --hostname 10.254.11.17 --gw sko_gateway
+</span><span class='line'>GW Name:   sko_gateway
+</span><span class='line'>Active:    true
+</span><span class='line'>Type:      layer2-extension
+</span><span class='line'>RBridge_ID 100
+</span><span class='line'>VLAN:      100
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Run the command against the remote switch and you should have a VXLAN tunnel between two fabrics.</p>
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Jeff Rametta</span></span>
+
+      
+
+
+
+
+
+
+
+
+  
+
+
+<time datetime="2014-10-26T02:25:41-07:00" pubdate data-updated="true">Oct 26<sup>th</sup>, 2014</time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/api/'>api</a>, <a class='category' href='/blog/categories/brocade/'>brocade</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  <a href="//twitter.com/share" class="twitter-share-button" data-url="http://jrametta.github.io/blog/2014/10/26/overlay-gateway/" data-via="" data-counturl="http://jrametta.github.io/blog/2014/10/26/overlay-gateway/" >Tweet</a>
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2014/07/16/openstack-live-migration/" title="Previous Post: OpenStack Live Migration">&laquo; OpenStack Live Migration</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+  <h1>Recent Posts</h1>
+  <ul id="recent_posts">
+    
+      <li class="post">
+        <a href="/blog/2014/10/26/overlay-gateway/">VXLAN Gateway Configuration Using the VCS RESTful API</a>
+      </li>
+    
+      <li class="post">
+        <a href="/blog/2014/07/16/openstack-live-migration/">OpenStack Live Migration</a>
+      </li>
+    
+      <li class="post">
+        <a href="/blog/2014/07/15/devstack-icehouse-with-brocade-ml2-plugin/">Devstack Icehouse With Brocade ML2 Plugin</a>
+      </li>
+    
+      <li class="post">
+        <a href="/blog/2014/07/14/red-hat-rdo-on-brocade-ethernet-fabrics/">Red Hat RDO on Brocade Ethernet Fabrics</a>
+      </li>
+    
+  </ul>
+</section>
+
+<section>
+  <h1>GitHub Repos</h1>
+  <ul id="gh_repos">
+    <li class="loading">Status updating...</li>
+  </ul>
+  
+  <a href="https://github.com/jrametta">@jrametta</a> on GitHub
+  
+  <script type="text/javascript">
+    $(document).ready(function(){
+        if (!window.jXHR){
+            var jxhr = document.createElement('script');
+            jxhr.type = 'text/javascript';
+            jxhr.src = '/javascripts/libs/jXHR.js';
+            var s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(jxhr, s);
+        }
+
+        github.showRepos({
+            user: 'jrametta',
+            count: 0,
+            skip_forks: true,
+            target: '#gh_repos'
+        });
+    });
+  </script>
+  <script src="/javascripts/github.js" type="text/javascript"> </script>
+</section>
+
+
+
+
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2014 - Jeff Rametta -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+<script type="text/javascript">
+      var disqus_shortname = 'httpjramettagithubiothefabric';
+      
+        
+        // var disqus_developer = 1;
+        var disqus_identifier = 'http://jrametta.github.io/blog/2014/10/26/overlay-gateway/';
+        var disqus_url = 'http://jrametta.github.io/blog/2014/10/26/overlay-gateway/';
+        var disqus_script = 'embed.js';
+      
+    (function () {
+      var dsq = document.createElement('script'); dsq.type = 'text/javascript'; dsq.async = true;
+      dsq.src = '//' + disqus_shortname + '.disqus.com/' + disqus_script;
+      (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+    }());
+</script>
+
+
+
+
+
+
+
+  <script type="text/javascript">
+    (function(){
+      var twitterWidgets = document.createElement('script');
+      twitterWidgets.type = 'text/javascript';
+      twitterWidgets.async = true;
+      twitterWidgets.src = '//platform.twitter.com/widgets.js';
+      document.getElementsByTagName('head')[0].appendChild(twitterWidgets);
+    })();
+  </script>
+
+
+
+
+
+</body>
+</html>
