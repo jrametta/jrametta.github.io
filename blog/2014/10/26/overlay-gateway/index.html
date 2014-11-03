@@ -157,7 +157,9 @@ snippets might provide the gist of what needs to be accomplished.</p>
 supports create, read, update, delete (CRUD) operations using the standard HTTP methods GET, POST, PUT, PATCH,
 and DELETE.  All requests payloads are represented as XML elements.</p>
 
-<p>There are helper functions in vfx_payload.py that are used to build the xml payload data for all of the REST
+<p>There are helper functions in
+<a href="https://github.com/jrametta/brocade-vf-extension/blob/master/vfx_payload.py">vfx_payload.py</a>
+that are used to build the xml payload data for all of the REST
 calls needed to configure and activate the overlay-gateway.  ElementTree is used to build and parse the XML
 as needed.  The example here returns the XML payload for creating the overlay-gateway (the first step required
 to create a tunnel).</p>
@@ -183,10 +185,39 @@ to create a tunnel).</p>
 </span></code></pre></td></tr></table></div></figure>
 
 
-<p>In vfx.py, I use the Python Requests module to create the overlay-gateway via a POST request to the
-management virtual IP of the VCS fabric.  Basic Authentication is used and I pass username/password
-credentials along with the request.  A media type of <code>application/vnd.configuration.resource+xml</code> must be
-specified in the Accept header field of the request.</p>
+<p>In <a href="https://github.com/jrametta/brocade-vf-extension/blob/master/vfx.py">vfx.py</a>, I use the Python Requests
+module to create the overlay-gateway via a POST request to the management virtual IP of the VCS fabric
+(getting the payload from the above code) Basic Authentication and header details are all setup in the class
+initialization.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='py'><span class='line'><span class="kn">import</span> <span class="nn">requests</span>
+</span><span class='line'><span class="kn">import</span> <span class="nn">vfx_payload</span> <span class="kn">as</span> <span class="nn">PF</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">def</span> <span class="nf">tunnel_create</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class='line'>    <span class="sd">&quot;&quot;&quot;create vxlan overlay gateway&quot;&quot;&quot;</span>
+</span><span class='line'>    <span class="n">payload</span> <span class="o">=</span> <span class="n">PF</span><span class="o">.</span><span class="n">overlay_gateway</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gateway_name</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">req</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">session</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">config_url</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">payload</span><span class="p">)</span>
+</span><span class='line'>    <span class="bp">self</span><span class="o">.</span><span class="n">check_response</span><span class="p">(</span><span class="n">req</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">req</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>You can basically repeat this process for each of the overlay gateway configuration tasks &ndash; building the xml
+payloads and and making the corresponding POST/PUT/DELETE request that is needed.</p>
+
+<p>The REST calls themselves are all in a class called overlay_gw.  When creating an instance of overlay_gw,
+several parameters are initialized, the configuration URL is defined, and the request sessions is setup.
+A media type of <code>application/vnd.configuration.resource+xml</code> must be specified in the Accept header field
+of the request.</p>
 
 <figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
 <span class='line-number'>2</span>
@@ -199,22 +230,23 @@ specified in the Accept header field of the request.</p>
 <span class='line-number'>9</span>
 <span class='line-number'>10</span>
 <span class='line-number'>11</span>
-</pre></td><td class='code'><pre><code class='py'><span class='line'><span class="kn">import</span> <span class="nn">requests</span>
-</span><span class='line'><span class="kn">import</span> <span class="nn">vfx_payload</span> <span class="kn">as</span> <span class="nn">PF</span>
+</pre></td><td class='code'><pre><code class='py'><span class='line'><span class="k">class</span> <span class="nc">overlay_gw</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+</span><span class='line'>    <span class="sd">&quot;&quot;&quot;class to manage vxlan overlay gateways&quot;&quot;&quot;</span>
+</span><span class='line'>    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">hostname</span><span class="p">,</span> <span class="n">username</span><span class="p">,</span> <span class="n">password</span><span class="p">):</span>
+</span><span class='line'>        <span class="bp">self</span><span class="o">.</span><span class="n">gateway_name</span>  <span class="o">=</span> <span class="n">name</span>
+</span><span class='line'>        <span class="bp">self</span><span class="o">.</span><span class="n">ext_type</span> <span class="o">=</span> <span class="s">&#39;layer2-extension&#39;</span>
 </span><span class='line'>
-</span><span class='line'><span class="k">def</span> <span class="nf">tunnel_create</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-</span><span class='line'>    <span class="sd">&quot;&quot;&quot;create vxlan overlay gateway&quot;&quot;&quot;</span>
-</span><span class='line'>    <span class="n">payload</span> <span class="o">=</span> <span class="n">PF</span><span class="o">.</span><span class="n">overlay_gateway</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gateway_name</span><span class="p">)</span>
-</span><span class='line'>    <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">config_url</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">payload</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">headers</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">headers</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">auth</span><span class="o">=</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">username</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">password</span><span class="p">))</span>
-</span><span class='line'>    <span class="bp">self</span><span class="o">.</span><span class="n">check_response</span><span class="p">(</span><span class="n">req</span><span class="p">)</span>
-</span><span class='line'>    <span class="k">return</span> <span class="n">req</span>
+</span><span class='line'>        <span class="bp">self</span><span class="o">.</span><span class="n">config_url</span> <span class="o">=</span> <span class="s">&quot;http://{}/rest/config/running&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">hostname</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="bp">self</span><span class="o">.</span><span class="n">session</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Session</span><span class="p">()</span>
+</span><span class='line'>        <span class="bp">self</span><span class="o">.</span><span class="n">session</span><span class="o">.</span><span class="n">auth</span> <span class="o">=</span> <span class="p">(</span><span class="n">username</span><span class="p">,</span> <span class="n">password</span><span class="p">)</span>
+</span><span class='line'>        <span class="bp">self</span><span class="o">.</span><span class="n">session</span><span class="o">.</span><span class="n">headers</span> <span class="o">=</span> <span class="p">{</span><span class="s">&#39;Accept&#39;</span><span class="p">:</span> <span class="s">&#39;application/vnd.configuration.resource+xml&#39;</span><span class="p">}</span>
 </span></code></pre></td></tr></table></div></figure>
 
 
-<p>You can basically repeat this process for each of the overlay gateway configuration tasks and make the
-corresponding POST/PUT/DELETE request that is needed.  The final command to create a tunnel with my script is</p>
+<p>Creating an instance of overlay_gw and making the propper calls will build the configuration on one fabric.
+Repeat the process on the other and the tunnel should be online.  The final command to create a tunnel with
+my script is</p>
 
 <figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
 <span class='line-number'>2</span>
